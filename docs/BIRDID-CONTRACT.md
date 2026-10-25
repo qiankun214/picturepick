@@ -1,4 +1,4 @@
-﻿# PicturePick AI 识鸟（Bird ID）实现契约（v5.2，已实现并验收）
+# PicturePick AI 识鸟（Bird ID）实现契约（v5.2，已实现并验收）
 
 > 本文件是「AI 识鸟」功能的**实现契约与验收记录**，与 `docs/API.md`（第 5.2 版，正式契约）
 > 一致；后端/前端/测试/文档都按本文件实现。
@@ -208,6 +208,9 @@ Content-Type: application/json
    模态框显示 `referenceNote` 提示或「未获取到参考照片」。
 7. 提供 `GET .../reference` 代理返回图片字节（`Cache-Control: no-store`），
    前端不直连外网图片（避免 CORS/防盗链）。
+8. **网页地址拒绝**：模型给出的 URL 若是网页（`.htm/.html` 结尾或含 `/wiki/`、`/item/`、`/cpjc/`），
+   后端不下载，直接加入 `rejected` 并以「不要重复」提示让模型重新检索（最多再请求 2 次）；
+   仍无图片文件直链 → 无参考图，`referenceNote` 写「AI 未能提供可访问的参考图片文件直链」。
 
 ## 5. 任务队列
 
@@ -552,7 +555,7 @@ footer.dock                        ← 原底部工具栏 + filmstrip 原样
 
 ## 10. 验收结果（v5.2，2026-10-25）
 
-- `pytest`：**280 passed**（既有 179 + 新增 101：配置/端点双协议/任务/EXIF 保真/解析/
+- `pytest`：**282 passed**（既有 179 + 新增 103：配置/端点双协议/任务/EXIF 保真/解析/
   模型参考图/ToolNotOpen 降级/SSRF 防护/结果恢复/客户端容错）。
 - `scripts/e2e_api.py`：**PASS=238 / FAIL=0**（既有 133 + 新增 105 项识鸟检查：
   status/config/endpoint/tasks/adopt/EXIF/reference/result/restore/dismiss/失败路径）。

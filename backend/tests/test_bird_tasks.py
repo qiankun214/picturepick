@@ -372,6 +372,81 @@ def test_web_search_unavailable_sets_reference_hint(client, library, mock_bird):
     assert wait_bird_idle(client)
 
 
+class _PageThenImageClient:
+    """模型首轮/第一次重试都给网页，第二次重试才给图片文件直链。"""
+
+    web_search_error = None
+
+    def __init__(self, config) -> None:
+        self.config = config
+        self.requests = []
+
+    def identify(self, image_bytes, seed="", photo_name=""):
+        from picturepick.birdid.parser import ParsedIdentification
+        from picturepick.models import BirdResult
+
+        return ParsedIdentification(
+            result=BirdResult(
+                identified=True,
+                family="鹭科",
+                species="白鹭",
+                speciesLatin="Egretta garzetta",
+                confidence=0.9,
+                referenceSource="上海自然博物馆",
+            ),
+            reference_image_url="https://www.snhm.org.cn/cpjc/info.htm?eid=983",
+        )
+
+    def request_reference_url(self, result, rejected=None):
+        self.requests.append(list(rejected or []))
+        if len(self.requests) == 1:
+            return {
+                "referenceImageUrl": "https://www.snhm.org.cn/cpjc/info.htm?eid=983",
+                "referenceSource": "上海自然博物馆",
+                "referenceNote": "",
+            }
+        return {
+            "referenceImageUrl": "https://img.example.com/egret.jpg",
+            "referenceSource": "中国鸟类图库",
+            "referenceNote": "",
+        }
+
+    def verify(self):
+        return True, "ok", 0
+
+
+def test_page_url_is_rejected_and_model_asked_again(client, library, mock_bird):
+    from picturepick.birdid.reference import ReferenceImage
+
+    sid, photos = session_photos(client, library)
+    service = client.app.state.bird
+    fake_client = _PageThenImageClient(None)
+    service._client_factory = lambda config: fake_client
+
+    def resolver(parsed, timeout=None):
+        url = parsed.reference_image_url or ""
+        if not url.endswith(".jpg"):
+            return None
+        return ReferenceImage(
+            data=b"\xff\xd8\xff\xe0fake",
+            content_type="image/jpeg",
+            source_url=url,
+            source_label=parsed.result.referenceSource or "AI 提供的图片",
+        )
+
+    service._reference_resolver = resolver
+    task = submit_and_wait(client, sid, photos[0]["id"])
+    assert task["status"] == "completed"
+    assert task["referenceAvailable"] is True
+    assert task["result"]["referenceSource"] == "中国鸟类图库"
+    # 第一次重试带上首轮的网页 URL 作为「不要重复」提示
+    assert any("snhm.org.cn" in u for u in fake_client.requests[0])
+    # 第二次重试带上第一次重试返回的网页 URL
+    assert len(fake_client.requests) >= 2
+    assert any("snhm.org.cn" in u for u in fake_client.requests[1])
+    assert wait_bird_idle(client)
+
+
 class _WikiFirstClient:
     """首轮模型给维基链接（不可访问），再让模型要一次境内可访问直链。"""
 
@@ -399,7 +474,7 @@ class _WikiFirstClient:
             reference_image_url="https://upload.wikimedia.org/wikipedia/commons/egret.jpg",
         )
 
-    def request_reference_url(self, result):
+    def request_reference_url(self, result, rejected=None, **kwargs):
         return {
             "referenceImageUrl": "https://img.example.com/egret.jpg",
             "referenceSource": "中国鸟类图库",

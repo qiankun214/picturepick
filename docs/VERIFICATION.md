@@ -1,4 +1,4 @@
-﻿# PicturePick 验证记录（第 5.2 版）
+# PicturePick 验证记录（第 5.2 版）
 
 环境：Windows 11 23H2 (10.0.22621) / Python 3.10.11 / Node v22.20.0 / npm 10.9.3 /
 FastAPI 0.115.14 / uvicorn 0.34.3 / Pillow 9.3.0 / PyInstaller 6.22.3 /
@@ -9,7 +9,7 @@ pywebview 6.2.1 / pythonnet 3.1.0 / Vite 5.4.21 / TypeScript 5.x。
 
 | 项目 | 结果 |
 | --- | --- |
-| 后端单元/接口（pytest） | **280 passed**（v4 既有 179 全过 + 新增 101 个 AI 识鸟用例，含端点协议/模型参考图/ToolNotOpen 降级/SSRF） |
+| 后端单元/接口（pytest） | **282 passed**（v4 既有 179 全过 + 新增 103 个 AI 识鸟用例，含端点协议/模型参考图/ToolNotOpen 降级/SSRF） |
 | API 端到端 `scripts/e2e_api.py` | **PASS=238 / FAIL=0**（v4 既有 133 全过 + 新增 105 项 AI 识鸟检查） |
 | 浏览器 UI `scripts/ui_e2e.cjs` | **PASS=113 / FAIL=0**（v4 既有 71 项全过 + AI 识鸟章节新增 42 项；日志 `.tmp/verify/ui-e2e-result.txt` 末尾 `ALL_PASS`） |
 | 前端构建 | `npx tsc --noEmit` + `npm run build` 通过（v5.2 前端构建，产物在 `backend/picturepick/webui`） |
@@ -29,7 +29,7 @@ cd E:\picturePick\backend
 python -m pytest -q
 ```
 
-结果：**280 passed**（v4 的 179 个用例全部保留/按新字段调整后通过 + 新增 101 个 AI 识鸟用例，
+结果：**282 passed**（v4 的 179 个用例全部保留/按新字段调整后通过 + 新增 103 个 AI 识鸟用例，
 分布在 `tests/test_bird_config.py`、`test_bird_tasks.py`、`test_bird_exif.py`、`test_bird_parser.py`、
 `test_bird_client.py`、`test_bird_reference.py`、`test_bird_result.py`）。
 
@@ -262,10 +262,10 @@ powershell -ExecutionPolicy Bypass -File E:\picturePick\scripts\verify-desktop.p
 
 ## 7. 第 5.2 版 AI 识鸟验收明细（新增）
 
-### 7.1 pytest（280 passed）
+### 7.1 pytest（282 passed）
 
 - v4 既有 179 全过（新字段为可选字段，不破坏旧断言；`PhotoItem`/`PickResult` 断言按需包含 `bird`）。
-- 新增 101 个用例，集中于 7 个 `test_bird_*.py`，覆盖契约 `docs/BIRDID-CONTRACT.md`
+- 新增 103 个用例，集中于 7 个 `test_bird_*.py`，覆盖契约 `docs/BIRDID-CONTRACT.md`
   §2 配置/端点、§4 调用/双协议/`web_search`/`ToolNotOpen`/解析/模型参考图、§5 任务队列、§7 EXIF、
   §6.3 结果 JSON/restore、§9 模拟模式与失败路径；其中含 **端点协议（chat/responses、无效端点）**、
   **模型提供参考图 URL（不搜索图源）**、**ToolNotOpen 自动降级**、**SSRF 防护** 等用例。
@@ -334,6 +334,10 @@ powershell -ExecutionPolicy Bypass -File E:\picturePick\scripts\verify-desktop.p
     在中国大陆不可访问）；若首轮没有有效参考图，后端会**再向模型请求一次**「境内可访问的真实图片直链」
     （仍由模型 API 提供，本机不搜索图库），仍失败才显示「未获取到参考照片」。该“维基拒绝→二次模型请求→
     下载成功”路径由 pytest 覆盖（`test_blocked_reference_triggers_second_model_request`）。
+  - **模型返回网页地址时**：后端识别出 `.htm/.html`、`/wiki/`、`/item/` 等页面 URL 后不下载，
+    而是把该 URL 作为「不要重复」的反馈再次要求模型给图片文件直链（最多再请求 2 次），仍失败则无参考图；
+    pytest 覆盖「首轮网页 → 第一次重试仍网页 → 第二次重试给图片 → 下载成功」
+    （`test_page_url_is_rejected_and_model_asked_again`）。
 - **真实 UI 全流程（真实 Key + 真实网络，非 mock）：PASS=15 / FAIL=0**
   - 测试连接 → 识鸟（白鹭 / 鹭科 / 白鹭属，置信度 **90%**）→ 结果模态框左「原照片」右「参考照片（AI 提供）」
     并排、参考图 `naturalWidth > 0` → 点击右上角 X 关闭 → 重新打开 → 采纳 → 左栏显示鸟种 →

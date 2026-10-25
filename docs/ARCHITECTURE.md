@@ -41,7 +41,7 @@ E:\picturePick\
 │   │       ├── exif.py       #   无损写 JPEG EXIF（Pillow 序列化 + APP1 原位替换 + 原子替换）
 │   │       ├── tasks.py      #   BirdTask 数据、任务仓库、单线程 worker、进度/队列位置
 │   │       └── service.py    #   BirdService：配置 + 提交 + 采纳 + EXIF 写盘 + 会话联动 + 参考图缓存
-│   ├── tests/                # pytest（280 个用例）
+│   ├── tests/                # pytest（282 个用例）
 │   └── pyproject.toml / requirements.txt
 ├── frontend/                 # TypeScript + Vite 前端
 │   ├── src/

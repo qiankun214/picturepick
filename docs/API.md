@@ -1081,6 +1081,10 @@ queued ──▶ running ──▶ completed ──▶ adopted
    不落盘、不写入结果 JSON。
 7. `/reference` 代理返回 `image/jpeg` + `Cache-Control: no-store`；无参考图 → 404
    `BIRD_REFERENCE_UNAVAILABLE`，模态框显示 `referenceNote` 提示或「未获取到参考照片」。
+8. **网页地址拒绝**：模型给的 `referenceImageUrl` 若明显是网页/页面（路径以 `.htm`/`.html` 等结尾，
+   或包含 `/wiki/`、`/item/`、`/cpjc/` 等），后端**不下载**，直接把该 URL 回传给模型要求重新检索
+   （`referenceNote` 里会带「不要重复」提示，最多再请求 2 次）；仍失败 → 无参考图并提示
+   「AI 未能提供可访问的参考图片文件直链」。**不会把网页当图片展示**。
 
 - 下载上限 15MB、超时 6s；只接受 `image/*`。
 - **防 SSRF**：外部图片 URL 必须是 `http(s)`、无 userinfo、非 `localhost`/`*.local`/`*.internal`，

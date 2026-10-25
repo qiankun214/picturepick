@@ -1,4 +1,4 @@
-﻿# PicturePick · 本地照片逐轮选片器
+# PicturePick · 本地照片逐轮选片器
 
 一个 **前后端分离** 的本地选片工具：后端 Python（FastAPI）+ 前端 TypeScript/HTML（Vite），
 既可以用「命令行启动 + 浏览器操作」，也可以直接运行打包好的 **Windows 桌面程序**。
@@ -229,6 +229,10 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
 > 为避免显示无法访问的图片：**维基百科/维基媒体（`upload.wikimedia.org`、`wikipedia.org`）的链接会被后端
 > 直接忽略**；若模型首轮只给了维基链接或没有参考图，后端会自动再向模型请求一次「中国境内可访问的真实
 > 图片文件直链」（仍由模型 API 提供，本机不搜索图库），拿到后再下载显示。
+>
+> 如果模型给的是**网页/文章地址而不是图片文件**（例如 `info.htm`、百科 `/item/` 页面），后端会判定为
+> 不合格，把该链接回传给模型要求重新检索（最多再请求 2 次，要求不能重复）；仍然拿不到图片文件直链时，
+> 界面显示「未获取到参考照片」，**不会拿网页冒充图片**。
 
 > **隐私说明**：真实识别模式下，**被识别的照片会压缩后上传到火山方舟服务**；不使用 AI 识鸟时
 > 照片仍只在本机后端与浏览器之间流转。参考照片的 URL 由**模型 API 提供**，后端只下载该 URL（SSRF 校验、
@@ -330,7 +334,7 @@ E:\picturePick\
 ├── backend/                  # Python 后端（FastAPI + uvicorn + Pillow）
 │   ├── picturepick/          # app / api / models / scanner / session / export / imaging / fsbrowse / cli
 │   │   └── birdid/           # AI 识鸟：config / client / parser / prompt / reference / exif / tasks / service
-│   ├── tests/                # pytest（280 个用例）
+│   ├── tests/                # pytest（282 个用例）
 │   └── pyproject.toml / requirements.txt
 ├── frontend/                 # TypeScript + Vite 前端（原生 DOM，无框架）
 │   └── src/                  # main / api / directory(取目录路径) / viewer / ui/*（ui/bird/* 为 AI 识鸟界面）
@@ -387,7 +391,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithIn
 
 | 项目 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端单元/接口 | `cd backend; python -m pytest -q` | **280 passed**（含 AI 识鸟配置/完整端点双协议/任务/EXIF/解析/AI 参考图与联网搜索降级/SSRF/恢复/客户端容错） |
+| 后端单元/接口 | `cd backend; python -m pytest -q` | **282 passed**（含 AI 识鸟配置/完整端点双协议/任务/EXIF/解析/AI 参考图与联网搜索降级/SSRF/恢复/客户端容错） |
 | API 端到端（server/browser + export-photos + restore/resume + 旧版 JSON 兼容 + AI 识鸟 mock 链路） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | **PASS=238 / FAIL=0**（v4 既有 133 + AI 识鸟新增 105；mock 后端 8126） |
 | 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | **PASS=113 / FAIL=0**（v4 既有 71 + AI 识鸟新增 42；含快捷键 B、队列、原照片+参考照片对照、模态框 X 关闭、端点设置、左栏鸟种、结果页计数） |
 | **真实 Key UI 全流程（非 mock）** | 真实方舟 Key + 真实网络（本机验证，脚本与截图在 `.tmp/` 下） | **PASS=15 / FAIL=0**（识鸟→AI 参考图→X 关闭→重开→采纳→左栏鸟种→结果页计数→结果 JSON） |

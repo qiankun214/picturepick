@@ -41,7 +41,11 @@ from ..session import ORIGIN_SERVER, SessionStore
 from . import exif
 from .client import BirdClientError, build_client
 from .config import BirdConfig, resolve_config, update_config
-from .reference import ReferenceImage, resolve_reference
+from .reference import (
+    ReferenceImage,
+    is_probably_webpage_url,
+    resolve_reference,
+)
 from .tasks import BirdTaskManager, TaskRecord
 
 #: 允许测试注入的客户端工厂 / 参考图解析器类型
@@ -227,28 +231,56 @@ class BirdService:
             self.manager.set_stage(record.id, "reference", 90)
             # 联网搜索未开通时，模型可能仍凭记忆给出图片直链：用更短超时尝试一次；
             # 下载失败再显示「需要开通联网搜索」的提示，避免长时间等待。
-            reference = self._resolve_reference(
-                client, parsed, timeout=3.0 if search_error else None
-            )
+            initial_url = parsed.reference_image_url or ""
+            if initial_url and is_probably_webpage_url(initial_url):
+                reference = None  # 模型给的是网页，不是图片文件，直接进入二次请求
+            else:
+                reference = self._resolve_reference(
+                    client, parsed, timeout=3.0 if search_error else None
+                )
             if reference is None and not search_error:
-                # 首轮模型给的可能是维基/不可访问链接：再让模型联网要一次「境内可访问」的直链
+                # 首轮给的可能是网页/维基/不可下载链接：把已拒绝的 URL 带上，再让模型联网
+                # 重新要「图片文件本身的直链」（最多再请求 2 次，要求不能重复不合格链接）。
+                rejected: list[str] = []
+                if initial_url:
+                    rejected.append(initial_url)
                 requester = getattr(client, "request_reference_url", None)
                 if callable(requester):
-                    found = requester(parsed.result)
-                    if found and found.get("referenceImageUrl"):
-                        parsed.reference_image_url = str(found["referenceImageUrl"])
+                    for _attempt in range(2):
+                        try:
+                            found = requester(parsed.result, rejected=rejected)
+                        except TypeError:  # 测试注入的简易 requester 不接受 rejected
+                            found = requester(parsed.result)
+                        if not found or not found.get("referenceImageUrl"):
+                            break
+                        url = str(found["referenceImageUrl"]).strip()
+                        if not url:
+                            break
+                        if is_probably_webpage_url(url):
+                            rejected.append(url)
+                            continue
+                        parsed.reference_image_url = url
                         if found.get("referenceSource"):
                             parsed.result.referenceSource = str(found["referenceSource"])
                         if found.get("referenceNote"):
                             parsed.result.referenceNote = str(found["referenceNote"])
                         reference = self._resolve_reference(client, parsed, timeout=8.0)
+                        if reference is not None:
+                            break
+                        rejected.append(url)
             if reference is not None:
-                parsed.result.referenceNote = original_note if not parsed.result.referenceNote else parsed.result.referenceNote
+                if not parsed.result.referenceNote:
+                    parsed.result.referenceNote = original_note
             elif search_error:
                 parsed.result.referenceNote = (
                     "参考照片需要火山方舟「联网搜索」插件（当前未开通或不可用）。"
                     "请在方舟控制台开通后重试："
                     "https://console.volcengine.com/common-buy/CC_content_plugin"
+                )
+            else:
+                parsed.result.referenceNote = (
+                    "AI 未能提供可访问的参考图片文件直链（可能只检索到网页）。"
+                    "可稍后重试或换一张更清晰的照片。"
                 )
         self.manager.finish_success(
             record.id,

@@ -102,6 +102,20 @@ def _is_blocked_reference_host(url: str) -> bool:
     return any(host == blocked or host.endswith("." + blocked) for blocked in BLOCKED_REFERENCE_HOSTS)
 
 
+def is_probably_webpage_url(url: str) -> bool:
+    """判断模型给的 URL 是否明显是网页/页面而不是图片文件（用于快速拒绝并回馈给模型）。"""
+    try:
+        parsed = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return True
+    path = (parsed.path or "").lower()
+    if path.endswith((".htm", ".html", ".shtml", ".php", ".asp", ".aspx", ".jsp")):
+        return True
+    if "/wiki/" in path or "/item/" in path or "/cpjc/" in path:
+        return True
+    return False
+
+
 def _download_image(url: str, http_get: HttpGetter) -> Tuple[bytes, str]:
     if not _is_safe_public_url(url):
         raise ReferenceError(f"不安全的参考图片来源: {url[:120]}")

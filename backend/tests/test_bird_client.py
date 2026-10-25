@@ -254,6 +254,22 @@ def test_request_reference_url_regex_fallback():
     assert found["referenceImageUrl"] == "https://img.example.com/egret.jpg"
 
 
+def test_request_reference_url_includes_rejected_feedback():
+    result = BirdResult(identified=True, species="白鹭")
+    content = json.dumps({"referenceImageUrl": "https://img.example.com/egret.jpg"}).encode()
+    client, fake, _sleeps = make_client(
+        [(200, responses_completion(content.decode()))],
+        endpoint="https://ark.example.com/api/v3/responses",
+    )
+    page_url = "https://www.snhm.org.cn/cpjc/info.htm?eid=983"
+    found = client.request_reference_url(result, rejected=[page_url])
+    assert found is not None
+    prompt = fake.calls[0]["payload"]["input"]
+    assert page_url in prompt
+    assert "网页" in prompt
+    assert "不要重复" in prompt
+
+
 def test_request_reference_url_not_identified_returns_none():
     client, fake, _sleeps = make_client([], endpoint="https://ark.example.com/api/v3/responses")
     assert client.request_reference_url(BirdResult(identified=False)) is None

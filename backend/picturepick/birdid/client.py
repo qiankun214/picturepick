@@ -17,7 +17,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageOps
 
@@ -325,12 +325,18 @@ class ArkBirdClient:
                 raise BirdClientError(BIRD_PARSE_ERROR, str(exc)) from exc
 
     def request_reference_url(
-        self, result: Any, *, _allow_retry: bool = True
+        self,
+        result: Any,
+        *,
+        rejected: Optional[List[str]] = None,
+        _allow_retry: bool = True,
     ) -> Optional[Dict[str, str]]:
-        """首轮没有可用参考图时，向模型再要一个「境内可访问的真实图片直链」。
+        """首轮没有可用参考图时，向模型再要一个「图片文件直链」。
 
         只在识别成功时调用；使用模型联网搜索能力（Responses API）或已有知识（Chat
-        Completions）。返回 ``{referenceImageUrl, referenceSource, referenceNote}``。
+        Completions）。``rejected`` 是之前不合格/不可下载的 URL，会带进提示词要求
+        模型不要重复（例如模型给了网页或维基页面时）。返回
+        ``{referenceImageUrl, referenceSource, referenceNote}``。
         """
         if not self.config.endpoint_supported or not getattr(result, "identified", False):
             return None
@@ -338,12 +344,21 @@ class ArkBirdClient:
         latin = str(getattr(result, "speciesLatin", "") or "").strip()
         if not species:
             return None
-        prompt = REFERENCE_RETRY_PROMPT.format(species=species, latin=latin or "—")
+        rejected_section = ""
+        if rejected:
+            lines = "\n".join(f"- {url}" for url in rejected[-5:] if url)
+            rejected_section = (
+                "以下链接之前已经不合格（是网页/不可访问/下载失败），不要重复给出：\n"
+                f"{lines}\n"
+            )
+        prompt = REFERENCE_RETRY_PROMPT.format(
+            species=species, latin=latin or "—", rejected_section=rejected_section
+        )
         if self.config.protocol == "responses":
             payload: Dict[str, Any] = {
                 "model": self.config.model,
                 "input": prompt,
-                "max_output_tokens": 500,
+                "max_output_tokens": 400,
                 "temperature": 0.1,
             }
             if self._web_search_enabled:
@@ -352,7 +367,7 @@ class ArkBirdClient:
             payload = {
                 "model": self.config.model,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 500,
+                "max_tokens": 400,
                 "temperature": 0.1,
             }
         try:
@@ -363,7 +378,9 @@ class ArkBirdClient:
                 self._web_search_enabled = False
                 self.web_search_error = exc.message
                 if _allow_retry:
-                    return self.request_reference_url(result, _allow_retry=False)
+                    return self.request_reference_url(
+                        result, rejected=rejected, _allow_retry=False
+                    )
             return None
         return _parse_reference_payload(content)
 
