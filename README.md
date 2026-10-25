@@ -47,8 +47,10 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 
 | 路径 | 说明 |
 | --- | --- |
-| `release/PicturePick-WebView2/PicturePick.exe` | 绿色版目录（整个目录一起分发，双击即用） |
-| `release/PicturePick-WebView2-win-x64.zip` | 上述目录的压缩包 |
+| `release/PicturePick-WebView2/PicturePick.exe` | 绿色版目录（整个目录一起分发，双击即用，约 33 MB） |
+| `release/PicturePick-WebView2-win-x64.zip` | 上述目录的压缩包（约 17 MB） |
+
+> 若之前构建过 Electron 版，产物已移到 `release/_legacy-electron/`（本机 Electron 无法启动，避免误用）。
 
 **启动后自检 / 验证**：
 

@@ -353,11 +353,20 @@ def build_arg_parser():
         action="store_true",
         help="自检模式：不开窗口，检查内置后端/前端资源/pythonnet/WebView2 桥接是否可用后退出",
     )
+    parser.add_argument(
+        "--selftest-backend",
+        action="store_true",
+        help="只检查内置后端与前端资源（不加载 pythonnet/WebView2），用于无 GUI 环境的冒烟测试",
+    )
     return parser
 
 
-def run_selftest(port: int, server: "BackendServer") -> int:
-    """不开窗口的启动自检：定位打包后依赖/资源问题。"""
+def run_selftest(port: int, server: "BackendServer", deep: bool = True) -> int:
+    """不开窗口的启动自检：定位打包后依赖/资源问题。
+
+    deep=True 时额外检查 pythonnet/WebView2 桥接；deep=False 只验证冻结后的
+    FastAPI/uvicorn/pydantic 与内置前端资源（可在无 GUI 的环境中运行）。
+    """
     import traceback
 
     checks: list[tuple[str, bool, str]] = []
@@ -367,17 +376,18 @@ def run_selftest(port: int, server: "BackendServer") -> int:
         webui = default_webui_dir()
         checks.append(("内置前端 index.html", (webui / "index.html").is_file(), str(webui)))
 
-        import webview
+        if deep:
+            import webview
 
-        checks.append(("import webview", True, str(getattr(webview, "__file__", ""))))
+            checks.append(("import webview", True, str(getattr(webview, "__file__", ""))))
 
-        import clr  # noqa: F401  (pythonnet)
+            import clr  # noqa: F401  (pythonnet)
 
-        checks.append(("import pythonnet/clr", True, ""))
+            checks.append(("import pythonnet/clr", True, ""))
 
-        from webview.platforms import edgechromium  # noqa: F401  (WebView2 后端)
+            from webview.platforms import edgechromium  # noqa: F401  (WebView2 后端)
 
-        checks.append(("import edgechromium(WebView2)", True, ""))
+            checks.append(("import edgechromium(WebView2)", True, ""))
 
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5) as response:
             health = json.loads(response.read().decode("utf-8"))
@@ -440,9 +450,16 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.selftest:
         log("进入自检模式（不创建窗口）")
-        code = run_selftest(port, server)
+        code = run_selftest(port, server, deep=True)
         server.stop()
         log("自检结束，退出码:", code)
+        return code
+
+    if args.selftest_backend:
+        log("进入后端自检模式（不加载 GUI，不创建窗口）")
+        code = run_selftest(port, server, deep=False)
+        server.stop()
+        log("后端自检结束，退出码:", code)
         return code
 
     try:

@@ -84,6 +84,17 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 Lead 侧已验证：`scripts/build.ps1` 全流程可跑通（前端构建 → PyInstaller onedir →
 release 组装 + zip），PyInstaller 构建成功；PowerShell 5.1 解析/执行通过（脚本为 UTF-8 BOM）。
 
+包体与内容（最终精简版）：
+
+| 项目 | 结果 |
+| --- | --- |
+| `release/PicturePick-WebView2/PicturePick.exe` | 5.5 MB，文件版本 1.0.0（ProductName/FileDescription 已写入） |
+| `release/PicturePick-WebView2/`（整个目录） | **33.2 MB**（已排除 pywebview 无关的 PySide6/Qt/GTK 后端，原 520MB → 33MB） |
+| `release/PicturePick-WebView2-win-x64.zip` | **17.2 MB** |
+| 内置运行时文件 | `pythonnet/runtime/Python.Runtime.dll`、`webview/lib/Microsoft.Web.WebView2.Core.dll`、`webview/lib/runtimes/win-x64/native/WebView2Loader.dll`、`_internal/webui`（v2 前端）均存在 |
+| 冻结后后端自检 | `PicturePick.exe --selftest-backend`（不开窗口）→ **SELFTEST RESULT: PASS**：内嵌前端存在、`/api/health` ok、`GET /` 由后端提供 755 字符 HTML（证明冻结后的 FastAPI/pydantic/uvicorn/静态服务正常） |
+| 旧 Electron 产物 | 已移到 `release/_legacy-electron/`（本机 Electron 无法启动，避免误用） |
+
 **窗口最终验证（需在安装有 WebView2 运行时的普通桌面会话执行，AI 沙箱内 Chromium/pythonnet 受限）**：
 
 ```powershell
@@ -100,6 +111,13 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-desktop.ps1
 powershell -File scripts\build.ps1 -Console
 build\webview-console\PicturePickConsole\PicturePick.exe --selftest
 build\webview-console\PicturePickConsole\PicturePick.exe --dir samples\photos
+```
+
+也可单独跑「不加载 GUI」的冻结后端自检（可在无桌面会话的环境执行）：
+
+```powershell
+release\PicturePick-WebView2\PicturePick.exe --selftest-backend
+# 结果写入 %LOCALAPPDATA%\PicturePick\logs\desktop.log 与 selftest.txt
 ```
 
 > 说明：早期 Electron 方案在本机遇 Chromium 启动即崩溃（`platform_channel`/`0xc0000005`，

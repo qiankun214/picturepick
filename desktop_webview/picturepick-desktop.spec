@@ -5,22 +5,26 @@
 内嵌：
   * Python 后端 picturepick 包（FastAPI/uvicorn/Pillow/pydantic）
   * 前端构建产物 backend/picturepick/webui → _MEIPASS/webui
-  * pywebview + pythonnet（Edge WebView2 后端）
+  * pywebview（仅 Edge WebView2 后端）+ pythonnet 运行时
+
+注意：pywebview 支持 Qt/GTK/CEF 等多种后端，本应用只用 Windows 的 Edge WebView2。
+为避免把 PySide6（约 430MB）等无关可选依赖打进包里，这里**不使用 collect_all('webview')**，
+只收集 webview 的 lib 数据 + 显式 hiddenimports，并在 excludes 中排除其它后端与无关大包。
 """
 
+import os
+import sys
 from pathlib import Path
 
-import os
-
-from PyInstaller.utils.hooks import collect_all, collect_submodules
-
-# 调试时可设置 PICTUREPICK_SPEC_CONSOLE=1 构建带控制台的版本，便于查看 traceback
-CONSOLE = os.environ.get("PICTUREPICK_SPEC_CONSOLE") == "1"
-COLLECT_NAME = "PicturePickConsole" if CONSOLE else "PicturePick"
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 ROOT = Path(SPECPATH).resolve().parent          # E:\picturePick
 BACKEND = ROOT / "backend"
 WEBUI = BACKEND / "picturepick" / "webui"
+VERSION_FILE = ROOT / "desktop_webview" / "pyinstaller" / "version_info.txt"
+
+CONSOLE = os.environ.get("PICTUREPICK_SPEC_CONSOLE") == "1"
+COLLECT_NAME = "PicturePickConsole" if CONSOLE else "PicturePick"
 
 datas = []
 binaries = []
@@ -31,23 +35,27 @@ if not (WEBUI / "index.html").exists():
     raise SystemExit(f"前端尚未构建：缺少 {WEBUI / 'index.html'}，请先执行 npm run build（frontend/）")
 datas.append((str(WEBUI), "webui"))
 
-# pywebview / pythonnet 运行时
-for package in ("webview", "pythonnet", "clr_loader", "proxy_tools", "bottle"):
-    try:
-        pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
-        datas += pkg_datas
-        binaries += pkg_binaries
-        hiddenimports += pkg_hidden
-    except Exception as exc:  # noqa: BLE001 - 缺少可选依赖时继续（构建会暴露问题）
-        print(f"[spec] collect_all({package}) 跳过：{exc}")
-
-hiddenimports += collect_submodules("webview.platforms")
+# pywebview：只需要 lib 数据（Microsoft.Web.WebView2.*.dll / WebView2Loader 等）
+datas += collect_data_files("webview", includes=["lib/**", "lib/*"])
 hiddenimports += [
-    "clr",
-    "pythonnet",
-    "webview.platforms.edgechromium",
+    "webview",
+    "webview.util",
+    "webview.window",
+    "webview.http",
     "webview.platforms.winforms",
-    # 后端（FastAPI/uvicorn 动态导入）
+    "webview.platforms.edgechromium",
+]
+
+# pythonnet / clr_loader：.NET 运行时桥接（Python.Runtime.dll 等）
+for package in ("pythonnet", "clr_loader"):
+    pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+    datas += pkg_datas
+    binaries += pkg_binaries
+    hiddenimports += pkg_hidden
+hiddenimports += ["clr", "clr_loader", "pythonnet", "proxy_tools", "bottle"]
+
+# 后端（FastAPI/uvicorn 动态导入）
+hiddenimports += [
     "picturepick",
     "picturepick.app",
     "picturepick.api",
@@ -80,6 +88,35 @@ hiddenimports += [
     "PIL.ImageDraw",
 ]
 
+# 排除无关的可选后端与大依赖（WebView2 桌面壳不需要）
+excludes = [
+    "PySide6",
+    "shiboken6",
+    "PyQt5",
+    "PyQt6",
+    "PySide2",
+    "gi",
+    "cairo",
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "cryptography",
+    "tkinter",
+    "_tkinter",
+    "tcl8",
+    "tk8",
+    "webview.platforms.qt",
+    "webview.platforms.gtk",
+    "webview.platforms.cef",
+    "webview.platforms.android",
+    "webview.platforms.mshtml",
+    "webview.platforms.cocoa",
+    "test",
+    "unittest",
+    "pytest",
+]
+
 a = Analysis(
     [str(ROOT / "desktop_webview" / "picturepick_desktop" / "__main__.py")],
     pathex=[str(BACKEND), str(ROOT / "desktop_webview")],
@@ -89,7 +126,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter.test", "test", "unittest", "pytest"],
+    excludes=excludes,
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -111,6 +148,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(ROOT / "desktop" / "resources" / "icon.ico"),
+    version=str(VERSION_FILE) if VERSION_FILE.exists() else None,
 )
 coll = COLLECT(
     exe,
