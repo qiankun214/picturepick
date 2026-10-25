@@ -50,7 +50,9 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 | `release/PicturePick-WebView2/PicturePick.exe` | 绿色版目录（整个目录一起分发，双击即用，约 33 MB） |
 | `release/PicturePick-WebView2-win-x64.zip` | 上述目录的压缩包（约 17 MB） |
 
-> 若之前构建过 Electron 版，产物已移到 `release/_legacy-electron/`（本机 Electron 无法启动，避免误用）。
+> 若之前构建过 Electron 版，其产物已移到 `release/_legacy-electron/`；
+> `release/win-unpacked/` 是更早的 Electron 绿色版残留（本机 Electron 无法启动，可手动删除），
+> **当前桌面版请使用 `release/PicturePick-WebView2/PicturePick.exe`**。
 
 **启动后自检 / 验证**：
 
@@ -61,6 +63,9 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-desktop.ps1
 
 脚本会先做不开窗口的运行时自检（后端/前端/pythonnet/WebView2 桥接），再启动真实窗口、
 自动截图并退出，最后打印 PASS/FAIL、截图路径与日志。
+
+> 只想验证打包运行时（不弹窗口）可执行：`release\PicturePick-WebView2\PicturePick.exe --selftest-backend`，
+> 结果写入 `%LOCALAPPDATA%\PicturePick\logs\desktop.log`。
 
 > 打包/自检输出如果失败，请把控制台输出与 `.tmp/desktop-verify/` 下的日志发给开发者。
 > 需要排查启动崩溃时可用带控制台的调试版：`powershell -File scripts\build.ps1 -Console`，
