@@ -1,4 +1,9 @@
-"""Pydantic 数据模型：字段与 docs/API.md §2/§3 的 JSON 契约一一对应。
+"""Pydantic 数据模型：字段与 docs/API.md（第 2 版）§2/§3/§4 的 JSON 契约一一对应。
+
+第 2 版要点：
+* ``SessionSummary`` 增加 ``origin``（server/browser）与 ``sourceLabel``；
+* ``PickResult`` 增加 ``origin`` 与 ``lastRound``（最后一轮仍保留的照片，供一键导出）；
+* ``POST /api/sessions`` 请求体同时支持 browser 来源（照片元数据）与 server 来源（目录扫描）。
 
 注意：运行环境安装的是 pydantic 1.10（FastAPI 0.115 同时兼容 v1/v2），
 因此这里只使用 v1/v2 共有的写法（``BaseModel``、``Field``、``.dict()``）。
@@ -7,7 +12,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -61,6 +66,8 @@ class RoundSummary(BaseModel):
 
 class SessionSummary(BaseModel):
     id: str
+    origin: str
+    sourceLabel: str
     root: str
     recursive: bool
     createdAt: str
@@ -93,8 +100,20 @@ class PhotoListResponse(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
-    directory: str
+    """POST /api/sessions 请求体（两种来源共用）。
+
+    * ``source="server"``（默认）：``directory`` 必填，后端扫描真实目录；
+    * ``source="browser"``：``label`` + ``photos`` 元数据，后端不读文件系统。
+
+    ``photos`` 故意使用宽松的 ``Any``：具体格式校验由 scanner 完成，
+    以便返回契约错误码 ``INVALID_PHOTOS`` 而不是 FastAPI 的 422。
+    """
+
+    source: str = "server"
+    directory: Optional[str] = None
+    label: Optional[str] = None
     recursive: bool = True
+    photos: Optional[Any] = None
 
 
 class CurrentSessionResponse(BaseModel):
@@ -113,14 +132,24 @@ class PickResultPhoto(BaseModel):
     pickedInRounds: List[int] = Field(default_factory=list)
 
 
+class LastRound(BaseModel):
+    """最后一轮仍被保留（pick）的照片，供前端「一键导出保留照片」使用。"""
+
+    index: int
+    pickedCount: int
+    pickedPhotoIds: List[str] = Field(default_factory=list)
+
+
 class PickResult(BaseModel):
     schemaVersion: int = 1
     generatedAt: str
+    origin: str
     sourceDirectory: str
     recursive: bool
     totalPhotos: int
     roundsPlayed: int
     pickedPhotoCount: int
+    lastRound: LastRound
     photos: List[PickResultPhoto] = Field(default_factory=list)
 
 

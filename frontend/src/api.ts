@@ -1,19 +1,18 @@
 /**
- * docs/API.md 的唯一前端调用封装。
+ * docs/API.md（第 2 版）的唯一前端调用封装。
  *
  * - 所有请求都走同源 `/api`（开发期由 Vite 代理到 127.0.0.1:8000）。
  * - 非 2xx 统一抛 ApiError（含 code / status / 面向用户的中文 message）。
- * - 图片、下载等「让浏览器直接发起」的地址通过 URL 构造函数暴露。
+ * - 图片、下载等「让浏览器直接发起」的地址通过 URL 构造函数暴露；
+ *   browser 来源会话的图片由 PhotoLibrary 的 object URL 提供，不走本模块。
  */
 import type {
   ApiErrorBody,
+  CreateSessionRequest,
   CurrentSessionResponse,
-  DialogPickResponse,
-  ExportResponse,
   FinishResponse,
-  FsListResponse,
-  FsRootsResponse,
   HealthResponse,
+  ImageVariant,
   PhotoItem,
   PickResult,
   RoundPhotosResponse,
@@ -25,13 +24,15 @@ export const API_BASE = '/api';
 /** 错误码 → 面向用户的中文文案（docs/API.md §1）。 */
 const ERROR_MESSAGES: Record<string, string> = {
   INVALID_PATH: '目录不存在、不是目录或没有读取权限',
-  NO_PHOTOS: '该目录下没有找到 .jpg / .jpeg 照片',
+  NO_PHOTOS: '没有找到 .jpg / .jpeg 照片',
+  INVALID_PHOTOS: '照片列表格式非法，请重新选择文件夹',
+  TOO_MANY_PHOTOS: '照片数量超过上限（50000 张），请选择更小的文件夹',
   SESSION_NOT_FOUND: '选片会话不存在或已过期',
   PHOTO_NOT_FOUND: '照片不存在，或文件已被移动/删除',
   ROUND_NOT_FOUND: '轮次不存在',
   NOT_ENOUGH_PICKS: '进入下一轮至少需要保留 2 张照片',
   PHASE_FINISHED: '本轮选片已结束',
-  DIALOG_UNAVAILABLE: '系统目录选择框不可用，请使用目录浏览',
+  DIALOG_UNAVAILABLE: '系统目录选择框不可用',
   WRITE_FAILED: '写入结果文件失败',
 };
 
@@ -118,25 +119,17 @@ export function health(signal?: AbortSignal): Promise<HealthResponse> {
   return request<HealthResponse>('/health', { signal });
 }
 
-export function getFsRoots(signal?: AbortSignal): Promise<FsRootsResponse> {
-  return request<FsRootsResponse>('/fs/roots', { signal });
-}
-
-export function listDirectory(path: string, signal?: AbortSignal): Promise<FsListResponse> {
-  return request<FsListResponse>(`/fs/list?path=${encodeURIComponent(path)}`, { signal });
-}
-
-/** 浏览器模式调用本机原生目录框；不可用时后端返回 501 DIALOG_UNAVAILABLE。 */
-export function pickDirectoryDialog(signal?: AbortSignal): Promise<DialogPickResponse> {
-  return request<DialogPickResponse>('/dialog/pick-directory', { method: 'POST', signal });
-}
-
 /* ------------------------------------------------------------------ */
 /* 会话接口                                                            */
 /* ------------------------------------------------------------------ */
 
-export function createSession(directory: string, recursive: boolean): Promise<SessionSummary> {
-  return request<SessionSummary>('/sessions', { method: 'POST', body: { directory, recursive } });
+/**
+ * 创建会话：
+ * - browser：只提交照片元数据（文件留在浏览器内存）→ origin=browser
+ * - server ：后端扫描本机目录（CLI / 桌面端 --dir 场景）
+ */
+export function createSession(payload: CreateSessionRequest): Promise<SessionSummary> {
+  return request<SessionSummary>('/sessions', { method: 'POST', body: payload });
 }
 
 export function getCurrentSession(signal?: AbortSignal): Promise<CurrentSessionResponse> {
@@ -217,22 +210,15 @@ export function getResult(sessionId: string, signal?: AbortSignal): Promise<Pick
   return request<PickResult>(`/sessions/${encodeURIComponent(sessionId)}/result`, { signal });
 }
 
-export function exportResult(sessionId: string, path: string): Promise<ExportResponse> {
-  return request<ExportResponse>(`/sessions/${encodeURIComponent(sessionId)}/export`, {
-    method: 'POST',
-    body: { path },
-  });
-}
-
 /* ------------------------------------------------------------------ */
 /* 直连浏览器的 URL（图片 / 下载），不经过 fetch                        */
 /* ------------------------------------------------------------------ */
 
-/** 原图地址。cacheBust 用于「重试加载」时绕过浏览器缓存。 */
+/** server 会话的图片地址。cacheBust 用于「重试加载」时绕过浏览器缓存。 */
 export function photoImageUrl(
   sessionId: string,
   photoId: string,
-  variant: 'original' | 'thumb' = 'original',
+  variant: ImageVariant = 'original',
   cacheBust?: number,
 ): string {
   const query = new URLSearchParams({ variant });
@@ -240,10 +226,27 @@ export function photoImageUrl(
   return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/photos/${encodeURIComponent(photoId)}/image?${query.toString()}`;
 }
 
-export function photoThumbUrl(sessionId: string, photoId: string): string {
-  return photoImageUrl(sessionId, photoId, 'thumb');
-}
-
 export function resultDownloadUrl(sessionId: string): string {
   return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/result?download=1`;
+}
+
+/** server 会话导出照片时，取回原图 Blob。 */
+export async function fetchPhotoBlob(
+  sessionId: string,
+  photoId: string,
+  variant: ImageVariant = 'original',
+): Promise<Blob> {
+  const response = await fetch(photoImageUrl(sessionId, photoId, variant));
+  if (!response.ok) {
+    let message = '照片读取失败';
+    try {
+      const payload = (await response.json()) as ApiErrorBody;
+      const detail = payload?.detail;
+      if (detail && typeof detail === 'object' && detail.message) message = detail.message;
+    } catch {
+      // 保留默认文案。
+    }
+    throw new ApiError(response.status, 'PHOTO_NOT_FOUND', friendlyMessage('PHOTO_NOT_FOUND', message));
+  }
+  return response.blob();
 }

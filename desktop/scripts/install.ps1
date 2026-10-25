@@ -1,4 +1,4 @@
-# PicturePick desktop dependency install script (pins sandbox-required environment variables).
+﻿# PicturePick desktop dependency install script (pins sandbox-required environment variables).
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 #         powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -SkipInstall   # print env only

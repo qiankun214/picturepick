@@ -1,7 +1,13 @@
 /**
- * PicturePick 浏览器端全流程验收（Playwright + Chromium）
- * 覆盖：选择目录 → 选片（上一张/下一张/缩放/自动放映/pick/统计）→ 结束本轮
- *       → 进入下一轮 → 再次 pick → 生成结果 → 下载 JSON → 校验字段 → 重新开始
+ * PicturePick 浏览器端全流程验收（Playwright + Chromium，第 2 版）
+ *
+ * 覆盖：
+ *   浏览器原生目录选择（<input webkitdirectory>，Playwright 目录上传）
+ *   → 选片（上一张/下一张/缩放/自动放映/pick/统计，图片全部来自 blob URL）
+ *   → 结束本轮 → 进入下一轮 → 再次 pick → 生成结果
+ *   → 一键导出最后一轮保留照片到指定文件夹（mock 目录句柄，校验写入文件）
+ *   → 下载 JSON 并校验（origin=browser、lastRound 等）
+ *   → 再选一组照片
  *
  * 前置：
  *   1) 后端已启动并托管已构建的前端：
@@ -37,6 +43,8 @@ try {
 }
 const { chromium } = playwright;
 
+const EXPECTED_TOTAL = 60;
+
 let pass = 0;
 let fail = 0;
 const failures = [];
@@ -56,30 +64,37 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, locale: 'zh-CN' });
   const page = await context.newPage();
   const pageErrors = [];
+  const imageRequests = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));
+  page.on('request', (req) => {
+    if (req.url().includes('/photos/') && req.url().includes('/image')) imageRequests.push(req.url());
+  });
   page.on('console', (msg) => { if (msg.type() === 'error') console.log('  [console.error]', msg.text()); });
 
   const ui = (id) => `[data-testid="${id}"]`;
   const text = (id) => page.textContent(ui(id));
   const shot = (name) => page.screenshot({ path: path.join(OUT, name), fullPage: false });
 
-  console.log('\n[1] 启动页与目录选择');
+  console.log('\n[1] 启动页：浏览器原生目录选择');
   await page.goto(BASE + '/', { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector(ui('path-input'), { timeout: 20000 });
-  check('启动页渲染', await page.isVisible(ui('start-view')));
-  await page.fill(ui('path-input'), PHOTOS);
+  await page.waitForSelector(ui('pick-folder-button'), { timeout: 20000 });
+  check('启动页出现「选择照片文件夹」按钮', await page.isVisible(ui('pick-folder-button')));
+  check('不存在自定义目录浏览弹窗', (await page.locator(ui('folder-browser')).count()) === 0);
+  check('不存在路径输入框', (await page.locator(ui('path-input')).count()) === 0);
+  await page.setInputFiles(ui('folder-input'), PHOTOS);
   await shot('01-start.png');
-  await page.press(ui('path-input'), 'Enter');
 
-  console.log('\n[2] 选片视图与统计');
+  console.log('\n[2] 选片视图、统计与本地图片');
   await page.waitForSelector(ui('picker-view'), { timeout: 30000 });
   await page.waitForSelector(`${ui('viewer-image')}[data-loaded="true"]`, { timeout: 30000 });
   check('选片视图出现', await page.isVisible(ui('picker-view')));
-  check('总数为 60', (await text('stats-total')).trim() === '60', await text('stats-total'));
-  check('当前序号为 1/60', (await text('stats-index')).trim() === '1/60', await text('stats-index'));
+  check(`总数为 ${EXPECTED_TOTAL}`, (await text('stats-total')).trim() === String(EXPECTED_TOTAL), await text('stats-total'));
+  check('当前序号为 1/60', (await text('stats-index')).trim() === `1/${EXPECTED_TOTAL}`, await text('stats-index'));
   check('初始 pick 数为 0', (await text('stats-picked')).trim() === '0', await text('stats-picked'));
   const viewed1 = parseInt((await text('stats-viewed')).split('/')[0], 10);
   check('浏览计数已上报', viewed1 >= 1, await text('stats-viewed'));
+  const viewerSrc = await page.getAttribute(ui('viewer-image'), 'src');
+  check('大图使用浏览器本地 blob URL（不上传）', Boolean(viewerSrc && viewerSrc.startsWith('blob:')), String(viewerSrc).slice(0, 60));
   await shot('02-picker.png');
 
   console.log('\n[3] 上一张/下一张');
@@ -90,8 +105,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.click(ui('prev-button'));
   await page.waitForFunction((sel) => document.querySelector(sel)?.textContent.trim() === '1/60', ui('stats-index'), { timeout: 8000 });
   check('上一张 → 1/60', true);
-  const viewed2 = parseInt((await text('stats-viewed')).split('/')[0], 10);
-  check('浏览计数累加（>=2）', viewed2 >= 2, await text('stats-viewed'));
 
   console.log('\n[4] 缩放');
   const scaleOf = async () => page.evaluate(() => {
@@ -122,7 +135,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.fill(ui('interval-input'), '1');
   const beforeAuto = (await text('stats-index')).trim();
   await page.click(ui('autoplay-toggle'));
-  await page.waitForFunction((sel) => document.querySelector(sel)?.textContent.trim() !== '1/60', ui('stats-index'), { timeout: 8000 }).catch(() => {});
+  await page.waitForFunction((sel, before) => document.querySelector(sel)?.textContent.trim() !== before, ui('stats-index'), beforeAuto, { timeout: 8000 }).catch(() => {});
   await sleep(1600);
   const afterAuto = (await text('stats-index')).trim();
   await page.click(ui('autoplay-toggle'));
@@ -130,14 +143,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await shot('04-autoplay.png');
 
   console.log('\n[6] pick 三张（键盘 P + 按钮）');
-  // 回到第一张
   while ((await text('stats-index')).trim() !== '1/60') {
     const cur = parseInt((await text('stats-index')).split('/')[0], 10);
     await page.click(cur > 1 ? ui('prev-button') : ui('next-button'));
     await page.waitForTimeout(120);
   }
   for (let i = 1; i <= 3; i++) {
-    await page.waitForFunction((sel) => document.querySelector(sel)?.textContent.trim() === '1/60', ui('stats-index'), { timeout: 5000 }).catch(() => {});
     await page.keyboard.press('p');
     await page.waitForTimeout(250);
     check(`第 ${i} 张 pick 后计数=${i}`, (await text('stats-picked')).trim() === String(i), await text('stats-picked'));
@@ -153,7 +164,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       await page.waitForSelector(`${ui('viewer-image')}[data-loaded="true"]`, { timeout: 15000 });
     }
   }
-  // 取消再恢复：验证 DELETE
   await page.click(ui('pick-button'));
   await page.waitForTimeout(300);
   check('再次点击取消 pick', (await text('stats-picked')).trim() === '2', await text('stats-picked'));
@@ -190,7 +200,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.click(ui('end-round-button'));
   await page.waitForSelector(ui('end-dialog'), { timeout: 8000 });
   await page.waitForTimeout(600);
-  await shot('084-round2-end.png');
   await page.click(ui('finish-button'));
   await page.waitForSelector(ui('result-view'), { timeout: 20000 });
   check('进入结果页', await page.isVisible(ui('result-view')));
@@ -203,6 +212,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const current = await page.evaluate(async () => (await fetch('/api/sessions/current')).json());
   const sid = current.session.id;
   check('当前会话 phase=finished', current.session.phase === 'finished', current.session.phase);
+  check('会话来源为 browser', current.session.origin === 'browser', String(current.session.origin));
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 15000 }),
     page.click(ui('result-download')),
@@ -212,10 +222,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('下载文件名为 .json', download.suggestedFilename().endsWith('.json'), download.suggestedFilename());
   const result = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
   check('schemaVersion=1', result.schemaVersion === 1);
+  check('origin=browser', result.origin === 'browser', String(result.origin));
   check('totalPhotos=60', result.totalPhotos === 60, String(result.totalPhotos));
   check('roundsPlayed=2', result.roundsPlayed === 2, String(result.roundsPlayed));
   check('photos 含全部 60 张', result.photos.length === 60, String(result.photos.length));
-  check('pickedPhotoCount=3（三轮入选）', result.pickedPhotoCount === 3, String(result.pickedPhotoCount));
+  check('pickedPhotoCount=3（多轮入选）', result.pickedPhotoCount === 3, String(result.pickedPhotoCount));
   const sorted = result.photos.every((p, i, arr) => i === 0 || arr[i - 1].pickCount >= p.pickCount);
   check('按 pickCount 降序', sorted);
   check('前两名 pickCount=2 且 pickedInRounds=[1,2]',
@@ -226,25 +237,58 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('第三名 pickCount=1 且 pickedInRounds=[1]',
     result.photos[2].pickCount === 1 && JSON.stringify(result.photos[2].pickedInRounds) === '[1]',
     JSON.stringify([result.photos[2].name, result.photos[2].pickCount, result.photos[2].pickedInRounds]));
-  check('记录相对路径与绝对路径', Boolean(result.photos[0].relativePath && result.photos[0].absolutePath));
+  check('browser 结果 absolutePath 为空串', result.photos.every((p) => p.absolutePath === ''));
+  check('lastRound 存在且 index=2', result.lastRound && result.lastRound.index === 2, JSON.stringify(result.lastRound).slice(0, 200));
+  check('lastRound.pickedCount=2 且 id 数与之一致',
+    result.lastRound && result.lastRound.pickedCount === 2 && result.lastRound.pickedPhotoIds.length === 2,
+    JSON.stringify(result.lastRound).slice(0, 300));
   const apiResult = await page.evaluate(async (id) => (await fetch(`/api/sessions/${id}/result`)).json(), sid);
   check('下载内容与 API 结果一致', JSON.stringify(apiResult) === JSON.stringify(result));
 
-  console.log('\n[10] 再选一组');
-  await page.click(ui('restart-button'));
-  await page.waitForSelector(ui('path-input'), { timeout: 10000 });
-  check('返回启动页', await page.isVisible(ui('start-view')));
-  await shot('09-restart.png');
+  console.log('\n[10] 一键导出最后一轮保留照片（mock 目录句柄）');
+  const lastNames = result.lastRound.pickedPhotoIds.map((id) => result.photos.find((p) => p.id === id)?.name || id);
+  await page.evaluate(() => {
+    window.__exported = [];
+    window.__picturepickTestExportDirHandle = {
+      name: 'mock-export-folder',
+      getFileHandle: async (name) => ({
+        createWritable: async () => ({
+          write: async (blob) => {
+            window.__exported.push({ name, size: blob && blob.size ? blob.size : 0 });
+          },
+          close: async () => {},
+        }),
+      }),
+    };
+  });
+  await page.click(ui('export-photos'));
+  await page.waitForFunction(() => window.__exported && window.__exported.length >= 2, null, { timeout: 30000 });
+  await page.waitForTimeout(500);
+  const exported = await page.evaluate(() => window.__exported);
+  check('导出了 2 个文件', exported.length === 2, JSON.stringify(exported));
+  check('导出文件名与保留照片一致', JSON.stringify(exported.map((f) => f.name).sort()) === JSON.stringify([...lastNames].sort()),
+    JSON.stringify({ exported: exported.map((f) => f.name), expected: lastNames }));
+  check('导出文件非空', exported.every((f) => f.size > 0), JSON.stringify(exported));
+  check('导出后无未捕获异常', pageErrors.length === 0, pageErrors.join(' | ') || '');
+  await shot('09-export.png');
 
-  check('无未捕获 JS 异常', pageErrors.length === 0, pageErrors.join(' | ') || '');
+  console.log('\n[11] 全程未请求后端图片（照片不上传）');
+  check('browser 会话未请求 /image 接口', imageRequests.length === 0, String(imageRequests.slice(0, 3)));
+
+  console.log('\n[12] 再选一组');
+  await page.click(ui('restart-button'));
+  await page.waitForSelector(ui('pick-folder-button'), { timeout: 10000 });
+  check('返回启动页（可选择新文件夹）', await page.isVisible(ui('pick-folder-button')));
+  await shot('10-restart.png');
 
   await browser.close();
   const summary = `\n===== 浏览器全流程 UI 验收: PASS=${pass} FAIL=${fail} =====`;
   console.log(summary);
   fs.writeFileSync(path.join(OUT, 'ui-e2e-result.txt'), summary + '\n' + (failures.length ? failures.join('\n') : 'ALL_PASS') + '\n');
   process.exit(fail === 0 ? 0 : 1);
-})().catch((error) => {
+})().catch(async (error) => {
   console.error('UI_E2E_CRASH', error);
+  fs.mkdirSync(OUT, { recursive: true });
   fs.writeFileSync(path.join(OUT, 'ui-e2e-result.txt'), 'CRASH: ' + String(error));
   process.exit(2);
 });

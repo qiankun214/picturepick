@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Verify PicturePick desktop packaging artifacts: PyInstaller sidecar, portable fallback bundle,
   electron-builder output.

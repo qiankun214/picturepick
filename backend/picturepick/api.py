@@ -1,4 +1,10 @@
-"""全部 API 路由实现（docs/API.md §3、§4）。"""
+"""全部 API 路由实现（docs/API.md 第 2 版 §3、§4）。
+
+会话支持两种来源（``POST /api/sessions``）：
+
+* ``server``：后端扫描本机目录（CLI ``--dir`` / 桌面端 ``--dir``），图片接口可用；
+* ``browser``：浏览器原生目录选择后只上传照片元数据，图片接口统一 404。
+"""
 
 from __future__ import annotations
 
@@ -11,9 +17,12 @@ from . import __version__, export, fsbrowse, imaging, scanner
 from .errors import (
     DIALOG_UNAVAILABLE,
     INVALID_PATH,
+    INVALID_PHOTOS,
+    INVALID_SOURCE,
     NO_PHOTOS,
     PHOTO_NOT_FOUND,
     SESSION_NOT_FOUND,
+    TOO_MANY_PHOTOS,
     ApiError,
 )
 from .models import (
@@ -30,11 +39,14 @@ from .models import (
     PickResult,
     SessionSummary,
 )
-from .session import Session, SessionStore
+from .session import ORIGIN_BROWSER, ORIGIN_SERVER, Session, SessionStore
 
 router = APIRouter()
 
 MAX_PAGE_LIMIT = 2000
+
+#: browser 来源未提供 label 时使用的展示名
+DEFAULT_BROWSER_LABEL = "照片文件夹"
 
 
 # ---- 内部辅助 --------------------------------------------------------------
@@ -82,19 +94,46 @@ def dialog_pick_directory() -> DialogResult:
     "/sessions",
     response_model=SessionSummary,
     status_code=201,
-    summary="扫描目录并创建会话",
+    summary="创建会话（server 扫描目录 / browser 照片元数据）",
 )
 def create_session(payload: CreateSessionRequest, request: Request) -> SessionSummary:
+    store = _store(request)
+    source = (payload.source or ORIGIN_SERVER).strip().lower()
+
+    if source == ORIGIN_BROWSER:
+        label = (payload.label or "").strip() or DEFAULT_BROWSER_LABEL
+        try:
+            photos = scanner.build_browser_photos(payload.photos)
+        except scanner.TooManyPhotosError as exc:
+            raise ApiError(TOO_MANY_PHOTOS, str(exc)) from exc
+        except scanner.InvalidPhotosError as exc:
+            raise ApiError(INVALID_PHOTOS, str(exc)) from exc
+        except scanner.NoPhotosError as exc:
+            raise ApiError(NO_PHOTOS, str(exc)) from exc
+        session = store.create(
+            root=label,
+            recursive=payload.recursive,
+            photos=photos,
+            origin=ORIGIN_BROWSER,
+            source_label=label,
+        )
+        return session.summary()
+
+    if source != ORIGIN_SERVER:
+        raise ApiError(INVALID_SOURCE, f"未知的会话来源: {payload.source}", 422)
+
     try:
-        result = scanner.scan(payload.directory, recursive=payload.recursive)
+        result = scanner.scan(payload.directory or "", recursive=payload.recursive)
     except scanner.InvalidDirectoryError as exc:
         raise ApiError(INVALID_PATH, str(exc)) from exc
     except scanner.NoPhotosError as exc:
         raise ApiError(NO_PHOTOS, str(exc)) from exc
-    session = _store(request).create(
+    session = store.create(
         root=result.root,
         recursive=result.recursive,
         photos=result.photos,
+        origin=ORIGIN_SERVER,
+        source_label=result.root,
     )
     return session.summary()
 
@@ -142,6 +181,11 @@ def get_photo_image(
     variant: Literal["original", "thumb"] = "original",
 ) -> Response:
     session = _session(request, session_id)
+    if session.origin == ORIGIN_BROWSER:
+        raise ApiError(
+            PHOTO_NOT_FOUND,
+            "浏览器来源会话不提供图片接口（照片文件只在浏览器本地）",
+        )
     photo = session.get_photo(photo_id)
     if not scanner.is_within(session.root, photo.absolute_path) or not os.path.isfile(photo.absolute_path):
         raise ApiError(PHOTO_NOT_FOUND, "照片文件不存在或不可读")

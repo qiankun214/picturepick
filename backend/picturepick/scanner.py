@@ -1,26 +1,39 @@
-"""照片目录扫描（docs/API.md §0）。
+"""照片来源解析（docs/API.md 第 2 版 §0、§4）。
 
-规则：
-* 照片 = 扩展名 ``.jpg`` / ``.jpeg``（大小写不敏感）的普通文件；
-* 递归模式下遍历所有子目录；非递归只扫描顶层；
-* 按 ``relativePath`` 不区分大小写升序排序（再按原始字符串打破平局），
-  与 ``/rounds/{index}/photos`` 的放映顺序一致；
-* ``relativePath`` 统一使用 ``/`` 作为分隔符，``absolutePath`` 使用本机路径。
+两种来源：
+
+* **server**：后端扫描真实目录（CLI ``--dir`` / 桌面端 ``--dir``），
+  规则为扩展名 ``.jpg`` / ``.jpeg``（大小写不敏感）的普通文件；递归模式下遍历
+  所有子目录，非递归只扫描顶层；按 ``relativePath`` 不区分大小写升序排序，
+  与 ``/rounds/{index}/photos`` 的放映顺序一致；``relativePath`` 统一使用 ``/``
+  分隔符，照片 ID = ``sha1(绝对路径)[:16]``。
+* **browser**：前端用浏览器原生目录选择框拿到文件后只上传元数据，
+  后端不读文件系统；``relativePath`` 必须是安全的相对路径，照片 ID =
+  ``sha1(relativePath)[:16]``，``absolutePath`` 为空串。
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass
-from typing import List, Optional
-
+from typing import Any, Dict, List, Optional
 
 PHOTO_EXTENSIONS = (".jpg", ".jpeg")
 
+#: browser 来源单次最多接收的照片元数据条数（docs/API.md §4）
+MAX_BROWSER_PHOTOS = 50000
+
+#: browser 来源 relativePath 中不允许出现的字符（Windows 文件名非法字符）
+_BROWSER_INVALID_PATH_CHARS = frozenset('<>:"|?*')
+
+#: 形如 ``C:`` / ``c:`` 的盘符前缀
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
+
 
 class ScanError(Exception):
-    """扫描相关错误基类。"""
+    """扫描/来源解析相关错误基类。"""
 
 
 class InvalidDirectoryError(ScanError):
@@ -28,7 +41,15 @@ class InvalidDirectoryError(ScanError):
 
 
 class NoPhotosError(ScanError):
-    """目录中没有任何 .jpg/.jpeg 照片。"""
+    """没有任何 .jpg/.jpeg 照片。"""
+
+
+class InvalidPhotosError(ScanError):
+    """browser 来源的照片元数据格式非法。"""
+
+
+class TooManyPhotosError(ScanError):
+    """browser 来源的照片数量超过上限。"""
 
 
 @dataclass(frozen=True)
@@ -166,3 +187,104 @@ def is_within(root: str, path: str) -> bool:
         return os.path.commonpath([root_abs, path_abs]) == root_abs
     except (OSError, ValueError):
         return False
+
+
+# ---- browser 来源（照片元数据，不读文件系统） ------------------------------
+
+
+def _normalize_browser_relative_path(value: Any, index: int) -> str:
+    """校验并规范化一条 browser 来源的 ``relativePath``，非法则抛 InvalidPhotosError。"""
+    if not isinstance(value, str):
+        raise InvalidPhotosError(f"photos[{index}].relativePath 必须是字符串")
+    if not value.strip():
+        raise InvalidPhotosError(f"photos[{index}].relativePath 不能为空")
+    if any(ord(char) < 32 for char in value):
+        raise InvalidPhotosError(f"photos[{index}].relativePath 含非法控制字符")
+
+    # 兼容误用反斜杠的客户端；契约要求正斜杠，统一后再校验。
+    normalized = value.replace("\\", "/")
+    if normalized.startswith("/"):
+        raise InvalidPhotosError(f"photos[{index}].relativePath 不允许绝对路径: {value!r}")
+    if _DRIVE_PREFIX.match(normalized):
+        raise InvalidPhotosError(f"photos[{index}].relativePath 不允许盘符: {value!r}")
+
+    segments = normalized.split("/")
+    for segment in segments:
+        if segment in ("", ".", ".."):
+            raise InvalidPhotosError(
+                f"photos[{index}].relativePath 含非法路径段（空段 / . / ..）: {value!r}"
+            )
+        if any(char in _BROWSER_INVALID_PATH_CHARS for char in segment):
+            raise InvalidPhotosError(f"photos[{index}].relativePath 含非法字符: {value!r}")
+
+    filename = segments[-1]
+    if os.path.splitext(filename)[1].lower() not in PHOTO_EXTENSIONS:
+        raise InvalidPhotosError(
+            f"photos[{index}].relativePath 不是 .jpg/.jpeg 文件: {value!r}"
+        )
+    return normalized
+
+
+def _browser_size_bytes(raw: Dict[str, Any], index: int) -> int:
+    value = raw.get("sizeBytes", 0)
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise InvalidPhotosError(f"photos[{index}].sizeBytes 必须是非负整数")
+    return int(value)
+
+
+def _validate_last_modified(raw: Dict[str, Any], index: int) -> None:
+    """``lastModified`` 仅做类型校验，不参与后端状态（展示与导出由前端负责）。"""
+    value = raw.get("lastModified")
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise InvalidPhotosError(f"photos[{index}].lastModified 必须是非负整数")
+
+
+def build_browser_photos(raw_photos: Any) -> List[ScannedPhoto]:
+    """把 browser 来源的照片元数据转换为 ``ScannedPhoto`` 列表。
+
+    * 空列表 → :class:`NoPhotosError`；格式非法 → :class:`InvalidPhotosError`；
+    * 超过 :data:`MAX_BROWSER_PHOTOS` → :class:`TooManyPhotosError`；
+    * 相同 ``relativePath`` 去重（保留首次出现的一条）；
+    * 返回结果按 ``relativePath`` 不区分大小写升序排序；
+    * ``id = sha1(relativePath)[:16]``，``absolute_path = ""``。
+    """
+    if raw_photos is None:
+        raise InvalidPhotosError("browser 来源必须提供 photos 列表")
+    if not isinstance(raw_photos, list):
+        raise InvalidPhotosError("photos 必须是数组")
+    if len(raw_photos) > MAX_BROWSER_PHOTOS:
+        raise TooManyPhotosError(
+            f"照片数量 {len(raw_photos)} 超过上限 {MAX_BROWSER_PHOTOS}"
+        )
+    if not raw_photos:
+        raise NoPhotosError("照片列表为空，没有 .jpg/.jpeg 照片")
+
+    photos: List[ScannedPhoto] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(raw_photos):
+        if not isinstance(raw, dict):
+            raise InvalidPhotosError(f"photos[{index}] 必须是对象")
+        relative_path = _normalize_browser_relative_path(raw.get("relativePath"), index)
+        size_bytes = _browser_size_bytes(raw, index)
+        _validate_last_modified(raw, index)
+        if relative_path in seen:  # 同一 relativePath 只保留一条
+            continue
+        seen.add(relative_path)
+        photos.append(
+            ScannedPhoto(
+                id=photo_id(relative_path),
+                name=relative_path.rsplit("/", 1)[-1],
+                relative_path=relative_path,
+                absolute_path="",
+                size_bytes=size_bytes,
+            )
+        )
+
+    if not photos:  # pragma: no cover - 上面的空列表检查已覆盖
+        raise NoPhotosError("照片列表为空，没有 .jpg/.jpeg 照片")
+    photos.sort(key=lambda photo: _sort_key(photo.relative_path))
+    return photos

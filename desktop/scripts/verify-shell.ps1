@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   PicturePick desktop startup verification with automatic window screenshot evidence.
 

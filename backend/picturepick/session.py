@@ -1,9 +1,12 @@
-"""会话 / 轮次 / pick 计数状态机（docs/API.md §4）。
+"""会话 / 轮次 / pick 计数状态机（docs/API.md 第 2 版 §4）。
 
 * 第 1 轮 = 全部照片；之后每一轮 = 上一轮被 pick 的照片（保持上一轮顺序）。
 * ``pickCount`` 不单独存储：它等于「历史各轮中被 pick 的次数」，
   这样取消 pick、进入下一轮都天然保持正确（历史轮次保留自己的 picked 集合）。
 * ``phase`` 只有 ``picking`` / ``finished``；finished 后拒绝任何修改。
+* 会话带有 ``origin``（``server`` / ``browser``）与 ``sourceLabel``：
+  server 来源为后端扫描的绝对目录，browser 来源为浏览器选择的文件夹名；
+  browser 来源的 ``Photo.absolute_path`` 为空串，图片接口不提供二进制。
 """
 
 from __future__ import annotations
@@ -34,6 +37,10 @@ from .scanner import ScannedPhoto
 
 PHASE_PICKING = "picking"
 PHASE_FINISHED = "finished"
+
+ORIGIN_SERVER = "server"
+ORIGIN_BROWSER = "browser"
+ORIGINS = (ORIGIN_SERVER, ORIGIN_BROWSER)
 
 #: 会话在内存中保留的时长（``/api/sessions/current`` 只返回未过期会话）。
 SESSION_TTL = timedelta(hours=24)
@@ -75,9 +82,13 @@ class Session:
         recursive: bool,
         photos: List[ScannedPhoto],
         created_at: Optional[datetime] = None,
+        origin: str = ORIGIN_SERVER,
+        source_label: Optional[str] = None,
     ) -> None:
         self.id = session_id
+        self.origin = origin if origin in ORIGINS else ORIGIN_SERVER
         self.root = root
+        self.source_label = source_label or root
         self.recursive = bool(recursive)
         self.created_at = created_at or now_local()
         self.photos: Dict[str, Photo] = {}
@@ -148,6 +159,8 @@ class Session:
         current = self.current_round
         return SessionSummary(
             id=self.id,
+            origin=self.origin,
+            sourceLabel=self.source_label,
             root=self.root,
             recursive=self.recursive,
             createdAt=isoformat(self.created_at),
@@ -232,10 +245,24 @@ class SessionStore:
         self._current_id: Optional[str] = None
         self._lock = threading.RLock()
 
-    def create(self, root: str, recursive: bool, photos: List[ScannedPhoto]) -> Session:
+    def create(
+        self,
+        root: str,
+        recursive: bool,
+        photos: List[ScannedPhoto],
+        origin: str = ORIGIN_SERVER,
+        source_label: Optional[str] = None,
+    ) -> Session:
         with self._lock:
             self._purge_locked()
-            session = Session(uuid.uuid4().hex, root, recursive, photos)
+            session = Session(
+                uuid.uuid4().hex,
+                root,
+                recursive,
+                photos,
+                origin=origin,
+                source_label=source_label,
+            )
             self._sessions[session.id] = session
             self._current_id = session.id
             return session

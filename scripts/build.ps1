@@ -1,21 +1,25 @@
-# PicturePick 一键构建
+﻿# PicturePick 一键构建
 # 用法：
-#   pwsh -File scripts\build.ps1                  # 构建 WebView2 桌面版（推荐，默认）
-#   pwsh -File scripts\build.ps1 -WithElectron    # 额外构建 Electron 版（需要 Electron 能在本机运行）
-#   pwsh -File scripts\build.ps1 -SkipFrontend -SkipDesktop
+#   powershell -ExecutionPolicy Bypass -File scripts\build.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Verify            # 构建后自动做窗口自检
+#   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Console            # 构建带控制台的调试版（看 traceback）
+#   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron       # 额外构建 Electron 版（本机可能无法运行）
+#   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -SkipFrontend       # 只重新打包桌面端
 param(
     [switch]$SkipInstall,
     [switch]$SkipFrontend,
     [switch]$SkipDesktop,
     [switch]$WithElectron,
-    [switch]$WithInstaller
+    [switch]$WithInstaller,
+    [switch]$Console,
+    [switch]$Verify
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-# ---- 沙箱/离线环境下的 npm & 二进制缓存配置（详见 docs/ARCHITECTURE.md §5）----
+# ---- 构建缓存配置（受限环境/离线环境必需；普通环境也无副作用）----
 $env:npm_config_cache = Join-Path $root '.cache\npm-build'
 $env:npm_config_logs_dir = Join-Path $root '.cache\npm-build\_logs'
 $env:npm_config_foreground_scripts = 'true'
@@ -27,6 +31,17 @@ New-Item -ItemType Directory -Force -Path $env:npm_config_cache, $env:electron_c
 
 function Assert-LastExit([string]$what) {
     if ($LASTEXITCODE -ne 0) { throw "$what 失败（exit $LASTEXITCODE）" }
+}
+
+# ---- 0. 依赖检查 ----
+Write-Host '[build] 检查 Python 打包依赖（fastapi/uvicorn/Pillow/pywebview/pythonnet/PyInstaller）...' -ForegroundColor Cyan
+python -c "import fastapi, uvicorn, PIL, webview, pythonnet, PyInstaller; print('deps ok')" 2>&1 | Out-String | Write-Host
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '[build] 缺少依赖，请先执行：' -ForegroundColor Yellow
+    Write-Host '        python -m pip install -r backend\requirements.txt'
+    Write-Host '        python -m pip install -r desktop_webview\requirements.txt'
+    Write-Host '        python -m pip install pyinstaller'
+    throw '打包依赖不完整'
 }
 
 # ---- 1. 前端 ----
@@ -46,30 +61,50 @@ if (-not $SkipFrontend) {
 
 # ---- 2. WebView2 桌面版（PyInstaller + pywebview）----
 if (-not $SkipDesktop) {
-    Write-Host '[build] 打包 WebView2 桌面版（PyInstaller）...' -ForegroundColor Cyan
+    if ($Console) {
+        $env:PICTUREPICK_SPEC_CONSOLE = '1'
+        $distPath = Join-Path $root 'build\webview-console'
+        $workPath = Join-Path $root 'build\.pyinstaller-webview-console'
+        $collectName = 'PicturePickConsole'
+        Write-Host '[build] 打包 WebView2 调试版（带控制台，用于查看 traceback）...' -ForegroundColor Cyan
+    }
+    else {
+        Remove-Item Env:\PICTUREPICK_SPEC_CONSOLE -ErrorAction SilentlyContinue
+        $distPath = Join-Path $root 'build\webview'
+        $workPath = Join-Path $root 'build\.pyinstaller-webview'
+        $collectName = 'PicturePick'
+        Write-Host '[build] 打包 WebView2 桌面版（PyInstaller）...' -ForegroundColor Cyan
+    }
+
     python -m PyInstaller --noconfirm --clean `
-        --distpath (Join-Path $root 'build\webview') `
-        --workpath (Join-Path $root 'build\.pyinstaller-webview') `
+        --distpath $distPath `
+        --workpath $workPath `
         (Join-Path $root 'desktop_webview\picturepick-desktop.spec')
     Assert-LastExit 'WebView2 桌面版打包'
 
-    $webviewExe = Join-Path $root 'build\webview\PicturePick\PicturePick.exe'
+    $webviewExe = Join-Path $distPath "$collectName\PicturePick.exe"
     if (-not (Test-Path $webviewExe)) { throw "桌面版产物缺失：$webviewExe" }
 
-    Write-Host '[build] 组装 release\PicturePick-WebView2 ...' -ForegroundColor Cyan
-    $releaseDir = Join-Path $root 'release\PicturePick-WebView2'
-    if (Test-Path $releaseDir) { Remove-Item $releaseDir -Recurse -Force }
-    New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
-    Copy-Item (Join-Path $root 'build\webview\PicturePick\*') $releaseDir -Recurse -Force
+    if (-not $Console) {
+        Write-Host '[build] 组装 release\PicturePick-WebView2 ...' -ForegroundColor Cyan
+        $releaseDir = Join-Path $root 'release\PicturePick-WebView2'
+        if (Test-Path $releaseDir) { Remove-Item $releaseDir -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+        Copy-Item (Join-Path $distPath "$collectName\*") $releaseDir -Recurse -Force
 
-    $zipPath = Join-Path $root 'release\PicturePick-WebView2-win-x64.zip'
-    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-    Compress-Archive -Path (Join-Path $releaseDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
-    Write-Host "       → $releaseDir\PicturePick.exe" -ForegroundColor DarkGray
-    Write-Host "       → $zipPath" -ForegroundColor DarkGray
+        $zipPath = Join-Path $root 'release\PicturePick-WebView2-win-x64.zip'
+        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+        Compress-Archive -Path (Join-Path $releaseDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
+        Write-Host "       → $releaseDir\PicturePick.exe" -ForegroundColor DarkGray
+        Write-Host "       → $zipPath" -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host "调试版产物：$webviewExe" -ForegroundColor DarkGray
+        Write-Host "运行它可以在控制台直接看到报错：`"$webviewExe`" --dir `"$root\samples\photos`"" -ForegroundColor DarkGray
+    }
 }
 
-# ---- 3. Electron 桌面版（可选，历史方案）----
+# ---- 3. Electron 桌面版（可选，历史方案；本机若 Electron 无法启动则不要用）----
 if ($WithElectron) {
     if (-not $SkipInstall -and -not (Test-Path (Join-Path $root 'desktop\node_modules'))) {
         Write-Host '[build] 安装 Electron 依赖...' -ForegroundColor Cyan
@@ -97,5 +132,14 @@ if ($WithElectron) {
 
 Write-Host ''
 Write-Host '==== 构建完成 ====' -ForegroundColor Green
-Write-Host '桌面版（推荐）：release\PicturePick-WebView2\PicturePick.exe（或 zip 解压后运行）' -ForegroundColor Green
-Write-Host '命令行版：python -m picturepick serve --dir <照片目录>（在 backend 目录，自动打开浏览器）' -ForegroundColor Green
+if (-not $SkipDesktop -and -not $Console) {
+    Write-Host '桌面版（推荐）：release\PicturePick-WebView2\PicturePick.exe（或 zip 解压后运行）' -ForegroundColor Green
+    if ($Verify) {
+        Write-Host ''
+        & (Join-Path $root 'scripts\verify-desktop.ps1') -Exe (Join-Path $root 'release\PicturePick-WebView2\PicturePick.exe')
+    }
+    else {
+        Write-Host '自检命令：powershell -ExecutionPolicy Bypass -File scripts\verify-desktop.ps1' -ForegroundColor Green
+    }
+}
+Write-Host '命令行版：cd backend; python -m picturepick serve --dir <照片目录>（自动打开浏览器）' -ForegroundColor Green

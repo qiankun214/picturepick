@@ -1,4 +1,4 @@
-# PicturePick 开发模式启动脚本：后端 FastAPI(8000) + 前端 Vite(5173)
+﻿# PicturePick 开发模式启动脚本：后端 FastAPI(8000) + 前端 Vite(5173)
 # 用法：pwsh -File scripts\dev.ps1 [-BackendPort 8000]
 param(
     [int]$BackendPort = 8000

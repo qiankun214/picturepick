@@ -1,26 +1,19 @@
 /**
- * 前端本地状态与偏好持久化（localStorage）。
- * 会话数据以服务端为准；这里只保存「设备偏好」和「最近目录」。
+ * 前端本地偏好与展示辅助。
+ * 会话数据以服务端为准；这里只保存「设备偏好」（自动放映间隔）。
  */
 
-const PREFERENCES_KEY = 'picturepick.preferences.v1';
+const PREFERENCES_KEY = 'picturepick.preferences.v2';
 
 export interface Preferences {
   /** 自动放映间隔（秒），1–120。 */
   intervalSeconds: number;
-  /** 是否递归扫描子目录。 */
-  recursive: boolean;
-  /** 最近使用过的目录（最新的在前，最多 8 条）。 */
-  recentDirectories: string[];
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
   intervalSeconds: 3,
-  recursive: true,
-  recentDirectories: [],
 };
 
-const MAX_RECENT_DIRECTORIES = 8;
 export const MIN_INTERVAL_SECONDS = 1;
 export const MAX_INTERVAL_SECONDS = 120;
 
@@ -39,32 +32,23 @@ function clampInterval(value: unknown): number {
   return Math.min(MAX_INTERVAL_SECONDS, Math.max(MIN_INTERVAL_SECONDS, Math.round(numeric)));
 }
 
-function sanitizePreferences(input: unknown): Preferences {
-  const source = (input ?? {}) as Partial<Preferences>;
-  const recent = Array.isArray(source.recentDirectories)
-    ? source.recentDirectories.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    : [];
-  return {
-    intervalSeconds: clampInterval(source.intervalSeconds),
-    recursive: typeof source.recursive === 'boolean' ? source.recursive : DEFAULT_PREFERENCES.recursive,
-    recentDirectories: recent.slice(0, MAX_RECENT_DIRECTORIES),
-  };
-}
-
 export function loadPreferences(): Preferences {
   const storage = getStorage();
-  if (!storage) return { ...DEFAULT_PREFERENCES, recentDirectories: [] };
+  if (!storage) return { ...DEFAULT_PREFERENCES };
   try {
     const raw = storage.getItem(PREFERENCES_KEY);
-    if (!raw) return { ...DEFAULT_PREFERENCES, recentDirectories: [] };
-    return sanitizePreferences(JSON.parse(raw) as unknown);
+    if (!raw) return { ...DEFAULT_PREFERENCES };
+    const parsed = JSON.parse(raw) as Partial<Preferences>;
+    return { intervalSeconds: clampInterval(parsed.intervalSeconds) };
   } catch {
-    return { ...DEFAULT_PREFERENCES, recentDirectories: [] };
+    return { ...DEFAULT_PREFERENCES };
   }
 }
 
 export function savePreferences(patch: Partial<Preferences>): Preferences {
-  const next = sanitizePreferences({ ...loadPreferences(), ...patch });
+  const next: Preferences = {
+    intervalSeconds: clampInterval(patch.intervalSeconds ?? loadPreferences().intervalSeconds),
+  };
   const storage = getStorage();
   if (storage) {
     try {
@@ -82,28 +66,6 @@ export function setIntervalSeconds(seconds: number): number {
   return value;
 }
 
-/** 记住一个目录（去重、最新在前、最多 8 条）。 */
-export function rememberDirectory(directory: string): string[] {
-  const trimmed = directory.trim();
-  if (!trimmed) return loadPreferences().recentDirectories;
-  const current = loadPreferences().recentDirectories;
-  const deduped = [trimmed, ...current.filter((item) => item.toLowerCase() !== trimmed.toLowerCase())];
-  const next = deduped.slice(0, MAX_RECENT_DIRECTORIES);
-  savePreferences({ recentDirectories: next });
-  return next;
-}
-
-export function forgetDirectory(directory: string): string[] {
-  const current = loadPreferences().recentDirectories;
-  const next = current.filter((item) => item.toLowerCase() !== directory.toLowerCase());
-  savePreferences({ recentDirectories: next });
-  return next;
-}
-
-export function clearRecentDirectories(): void {
-  savePreferences({ recentDirectories: [] });
-}
-
 /* ------------------------------------------------------------------ */
 /* 展示辅助                                                            */
 /* ------------------------------------------------------------------ */
@@ -114,13 +76,6 @@ export function baseName(path: string): string {
   if (!normalized) return path;
   const parts = normalized.split(/[\\/]/);
   return parts[parts.length - 1] || normalized;
-}
-
-export function dirName(path: string): string {
-  const normalized = path.replace(/[\\/]+$/, '');
-  const index = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'));
-  if (index <= 0) return normalized;
-  return normalized.slice(0, index);
 }
 
 export function formatBytes(bytes: number): string {

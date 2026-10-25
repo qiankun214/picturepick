@@ -1,21 +1,22 @@
 /**
  * 底部胶片条：缩略图懒加载（IntersectionObserver）、点击跳转、pick 徽标、当前项高亮。
- * 缩略图统一走 /image?variant=thumb，避免原图解码开销。
+ * 缩略图 URL 通过 resolveImageUrl 回调取得：
+ * - browser 会话 → PhotoLibrary 的 object URL
+ * - server 会话 → /api/sessions/{sid}/photos/{id}/image?variant=thumb
  */
-import type { PhotoItem } from '../types';
-import { photoThumbUrl } from '../api';
+import type { PhotoItem, ResolveImageUrl } from '../types';
 
 export class Filmstrip {
   private readonly root: HTMLElement;
-  private readonly sessionId: string;
+  private readonly resolveImageUrl: ResolveImageUrl;
   private readonly onSelect: (index: number) => void;
   private readonly observer: IntersectionObserver;
   private photos: PhotoItem[] = [];
   private activeIndex = 0;
 
-  constructor(root: HTMLElement, sessionId: string, onSelect: (index: number) => void) {
+  constructor(root: HTMLElement, resolveImageUrl: ResolveImageUrl, onSelect: (index: number) => void) {
     this.root = root;
-    this.sessionId = sessionId;
+    this.resolveImageUrl = resolveImageUrl;
     this.onSelect = onSelect;
     this.root.classList.add('filmstrip');
     this.root.setAttribute('role', 'listbox');
@@ -56,13 +57,16 @@ export class Filmstrip {
       item.dataset.index = String(index);
       item.setAttribute('role', 'option');
       item.title = photo.relativePath;
+      item.dataset.photoId = photo.id;
+      const thumbUrl = this.resolveImageUrl(photo.id, 'thumb');
       item.innerHTML = `
-        <img class="film-thumb__img" alt="" data-src="${photoThumbUrl(this.sessionId, photo.id)}" loading="lazy" />
+        <img class="film-thumb__img" alt="" data-src="${thumbUrl}" loading="lazy" />
         <span class="film-thumb__star" aria-hidden="true">★</span>
         <span class="film-thumb__index">${index + 1}</span>
       `;
       if (photo.picked) item.classList.add('is-picked');
       if (photo.viewed) item.classList.add('is-viewed');
+      if (!thumbUrl) item.classList.add('is-broken');
       fragment.appendChild(item);
       const img = item.querySelector<HTMLImageElement>('img');
       if (img) {
@@ -86,6 +90,22 @@ export class Filmstrip {
     if (active) active.scrollIntoView({ block: 'nearest', inline: 'center' });
   }
 
+  /** 缩略图生成完成后替换对应图片（不重建 DOM）。 */
+  updateThumb(photoId: string, url: string): void {
+    const item = this.root.querySelector<HTMLElement>(
+      `.film-thumb[data-photo-id="${photoId}"]`,
+    );
+    const img = item?.querySelector<HTMLImageElement>('img');
+    if (!item || !img) return;
+    item.classList.remove('is-broken');
+    const pending = img.dataset.src;
+    if (pending) {
+      img.dataset.src = url;
+      return;
+    }
+    if (img.src !== url) img.src = url;
+  }
+
   /** 照片 pick/viewed 状态变化后刷新单个缩略图（不重建 DOM）。 */
   refresh(photo: PhotoItem, index: number): void {
     this.photos[index] = photo;
@@ -99,9 +119,4 @@ export class Filmstrip {
     this.observer.disconnect();
     this.root.replaceChildren();
   }
-}
-
-/** 结束本轮弹窗里展示 pick 缩略图用的 url 辅助（与胶片条一致）。 */
-export function thumbUrlFor(sessionId: string, photoId: string): string {
-  return photoThumbUrl(sessionId, photoId);
 }

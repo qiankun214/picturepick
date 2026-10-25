@@ -348,7 +348,64 @@ def build_arg_parser():
     parser.add_argument("--port", type=int, default=0, help="后端端口（默认自动选择空闲端口）")
     parser.add_argument("--debug", action="store_true", help="开启 pywebview 调试模式")
     parser.add_argument("--minimized", action="store_true", help="以最小化方式启动")
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="自检模式：不开窗口，检查内置后端/前端资源/pythonnet/WebView2 桥接是否可用后退出",
+    )
     return parser
+
+
+def run_selftest(port: int, server: "BackendServer") -> int:
+    """不开窗口的启动自检：定位打包后依赖/资源问题。"""
+    import traceback
+
+    checks: list[tuple[str, bool, str]] = []
+    try:
+        from picturepick.app import default_webui_dir
+
+        webui = default_webui_dir()
+        checks.append(("内置前端 index.html", (webui / "index.html").is_file(), str(webui)))
+
+        import webview
+
+        checks.append(("import webview", True, str(getattr(webview, "__file__", ""))))
+
+        import clr  # noqa: F401  (pythonnet)
+
+        checks.append(("import pythonnet/clr", True, ""))
+
+        from webview.platforms import edgechromium  # noqa: F401  (WebView2 后端)
+
+        checks.append(("import edgechromium(WebView2)", True, ""))
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5) as response:
+            health = json.loads(response.read().decode("utf-8"))
+        checks.append(("后端 /api/health", health.get("status") == "ok", json.dumps(health)))
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
+            html = response.read(800).decode("utf-8", "replace")
+        checks.append(("内置前端可由后端提供", "<html" in html.lower() or "<!doctype" in html.lower(), f"{len(html)} chars"))
+
+        ok = all(item[1] for item in checks)
+        for name, passed, detail in checks:
+            log("SELFTEST", "PASS" if passed else "FAIL", name, detail)
+        log("SELFTEST RESULT:", "PASS" if ok else "FAIL")
+        report = log_dir() / "selftest.txt"
+        try:
+            report.write_text(
+                "\n".join(f"{'PASS' if p else 'FAIL'} {n} {d}" for n, p, d in checks)
+                + f"\nSELFTEST RESULT: {'PASS' if ok else 'FAIL'}\n",
+                encoding="utf-8",
+            )
+            log("自检报告:", report)
+        except OSError:
+            pass
+        return 0 if ok else 1
+    except Exception as exc:  # noqa: BLE001
+        log("SELFTEST RESULT: FAIL", exc)
+        log(traceback.format_exc())
+        return 1
 
 
 def prescan(server: BackendServer, directory: str, recursive: bool) -> None:
@@ -380,6 +437,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.directory:
         prescan(server, args.directory, args.recursive)
+
+    if args.selftest:
+        log("进入自检模式（不创建窗口）")
+        code = run_selftest(port, server)
+        server.stop()
+        log("自检结束，退出码:", code)
+        return code
 
     try:
         import webview

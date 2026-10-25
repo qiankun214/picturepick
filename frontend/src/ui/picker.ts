@@ -7,9 +7,10 @@
  * - 进入下一轮 POST rounds/next；结束 POST finish
  */
 import * as api from '../api';
-import { ApiError, errorText, photoImageUrl, photoThumbUrl } from '../api';
+import { ApiError, errorText } from '../api';
+import type { PhotoLibrary } from '../library';
 import { formatBytes, loadPreferences, setIntervalSeconds } from '../state';
-import type { PhotoItem, PickResult, SessionSummary } from '../types';
+import type { PhotoItem, PickResult, ResolveImageUrl, SessionSummary } from '../types';
 import { ImageViewer } from '../viewer';
 import { escapeHtml, icon, qs, qsa } from './dom';
 import { Filmstrip } from './filmstrip';
@@ -18,6 +19,10 @@ import { showToast } from './toast';
 
 export interface PickerViewOptions {
   session: SessionSummary;
+  /** 浏览器来源会话的本地文件图库；server 会话也传入（reconcile 无副作用）。 */
+  library: PhotoLibrary;
+  /** 统一图片地址解析：browser → object URL，server → /image 接口。 */
+  resolveImageUrl: ResolveImageUrl;
   onFinished: (session: SessionSummary, result: PickResult) => void;
 }
 
@@ -65,6 +70,7 @@ export class PickerView {
   private imageSize: { width: number; height: number } | null = null;
   private readonly reportedViewed = new Set<string>();
   private readonly pickingInFlight = new Set<string>();
+  private unsubscribeThumb: (() => void) | null = null;
   private destroyed = false;
 
   constructor(root: HTMLElement, options: PickerViewOptions) {
@@ -86,8 +92,12 @@ export class PickerView {
         if (this.dom) this.dom.zoomLabel.textContent = `${percent}%`;
       },
     });
-    this.filmstrip = new Filmstrip(this.dom.filmstripRoot, this.session.id, (index) => {
+    this.filmstrip = new Filmstrip(this.dom.filmstripRoot, this.options.resolveImageUrl, (index) => {
       this.showPhoto(index);
+    });
+    // browser 会话的缩略图是异步生成的，完成后替换胶片条中的图片。
+    this.unsubscribeThumb = this.options.library.onThumbReady((photoId, url) => {
+      this.filmstrip?.updateThumb(photoId, url);
     });
     this.dom.intervalInput.value = String(this.intervalSeconds);
     this.root.addEventListener('click', this.handleClick);
@@ -107,6 +117,8 @@ export class PickerView {
     this.dom?.intervalInput.removeEventListener('change', this.handleIntervalChange);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+    this.unsubscribeThumb?.();
+    this.unsubscribeThumb = null;
     this.viewer?.destroy();
     this.filmstrip?.destroy();
     this.viewer = null;
@@ -124,6 +136,11 @@ export class PickerView {
             <div class="brand-mark brand-mark--sm">${icon('camera')}</div>
             <span class="topbar__name">PicturePick</span>
             <span class="round-chip" data-role="round-chip">第 ${session.roundIndex} 轮</span>
+            ${
+              session.origin === 'browser'
+                ? `<span class="origin-chip" title="照片只在本地浏览器中读取，不会上传到服务器">${icon('folder')}本地</span>`
+                : ''
+            }
           </div>
           <div class="topbar__path" data-role="root-path" title="${escapeHtml(session.root)}">${escapeHtml(session.root)}</div>
           <div class="topbar__stats">
@@ -173,7 +190,11 @@ export class PickerView {
                 <span class="pick-button__text">保留</span>
                 <kbd class="pick-button__kbd">P</kbd>
               </button>
-              <p class="dock__tip">保留的照片将进入下一轮继续筛选</p>
+              <p class="dock__tip">${
+                session.origin === 'browser'
+                  ? '照片仅在本地浏览器中读取，不会上传'
+                  : '保留的照片将进入下一轮继续筛选'
+              }</p>
             </div>
 
             <div class="dock__group dock__group--center">
@@ -247,6 +268,8 @@ export class PickerView {
       this.index = 0;
       this.imageSize = null;
       this.reportedViewed.clear();
+      // browser 会话：按 relativePath 把本地 File 绑定到后端返回的 photoId。
+      this.options.library.reconcile(photos);
       this.filmstrip?.setPhotos(photos);
       this.hideOverlay();
       this.updateChrome();
@@ -266,7 +289,7 @@ export class PickerView {
     const photo = this.photos[next];
     if (!photo) return;
     this.imageSize = null;
-    this.viewer?.setImage(photoImageUrl(this.session.id, photo.id));
+    this.viewer?.setPhoto(photo.id, this.options.resolveImageUrl);
     this.filmstrip?.setActive(next);
     this.updateChrome();
     this.scheduleAutoplay();
@@ -408,7 +431,7 @@ export class PickerView {
         this.viewer?.rotateClockwise();
         break;
       case 'end-round':
-        this.openEndRoundDialog();
+        void this.openEndRoundDialog();
         break;
       case 'fullscreen':
         void this.toggleFullscreen();
@@ -611,7 +634,7 @@ export class PickerView {
 
   /* ------------------------------ 结束本轮 / 下一轮 ------------------------------ */
 
-  private openEndRoundDialog(): void {
+  private async openEndRoundDialog(): Promise<void> {
     if (this.destroyed) return;
     this.stopAutoplay();
     const picked = this.photos.filter((photo) => photo.picked);
@@ -620,6 +643,17 @@ export class PickerView {
     const canNextRound = pickedCount >= 2;
     const isLastRound = this.session.rounds.length > 0 && this.session.roundIndex >= this.session.rounds.length;
 
+    // browser 会话：弹窗缩略图使用本地小图 object URL；先确保生成完毕，
+    // 避免把全尺寸原图塞进弹窗造成渲染压力。
+    if ((this.session.origin ?? 'server') === 'browser' && picked.length) {
+      try {
+        await this.options.library.ensureThumbs(picked.slice(0, 12).map((photo) => photo.id));
+      } catch {
+        // 缩略图失败时退化为原图，不影响弹窗。
+      }
+    }
+    if (this.destroyed) return;
+
     const body = document.createElement('div');
     body.className = 'end-round';
     const thumbs = picked
@@ -627,7 +661,7 @@ export class PickerView {
       .map(
         (photo) => `
         <div class="end-round__thumb" title="${escapeHtml(photo.name)}">
-          <img src="${photoThumbUrl(this.session.id, photo.id)}" alt="" loading="lazy" />
+          <img src="${this.options.resolveImageUrl(photo.id, 'thumb')}" alt="" loading="lazy" />
         </div>`,
       )
       .join('');

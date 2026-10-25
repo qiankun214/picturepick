@@ -1,8 +1,8 @@
-# PicturePick 验证记录（Lead 集成验收）
+# PicturePick 验证记录（第 2 版）
 
 环境：Windows 11 23H2 (10.0.22621) / Python 3.10.11 / Node v22.20.0 / npm 10.9.3 /
 FastAPI 0.115.14 / uvicorn 0.34.3 / Pillow 9.3.0 / PyInstaller 6.22.3 /
-Electron 33.4.11 / electron-builder 26.18.0 / Vite 5.4.21 / TypeScript 5.x。
+pywebview 6.2.1 / pythonnet 3.1.0 / Vite 5.4.21 / TypeScript 5.x。
 工作目录：`E:\picturePick`。
 
 ## 1. 后端单元/接口测试（pytest）
@@ -12,76 +12,99 @@ cd E:\picturePick\backend
 python -m pytest -q
 ```
 
-结果：**82 passed**（扫描过滤/排序、会话生命周期、分页、原图/缩略图、viewed/pick 幂等、
-多轮状态机、finish 结果 JSON、下载/导出、静态/SPA、CORS、错误码、CLI 参数与端口占用）。
+结果：**117 passed**（原 82 个 v1 用例全部保留 + 新增 35 个 browser 来源会话用例）。
+覆盖：扫描过滤/排序、server 与 browser 双来源会话创建与校验（空/绝对路径/`..`/非 jpg/去重/上限）、
+分页、原图/缩略图、viewed/pick 幂等、多轮状态机、finish 结果 JSON（origin / sourceDirectory /
+absolutePath / lastRound）、下载/导出、browser 图片接口 404、静态/SPA、CORS、错误码、CLI。
 
 ## 2. API 端到端（真实 HTTP + 真实 JPEG 样例）
 
 ```powershell
-# Python 模块实例
-python -m picturepick serve --port 8131 --no-open
-python scripts/e2e_api.py --base-url http://127.0.0.1:8131 --photos-dir samples\photos
-
-# PyInstaller 打包后的 sidecar 实例
-build\backend\picturepick-backend.exe serve --port 8132 --no-open
-python scripts/e2e_api.py --base-url http://127.0.0.1:8132 --photos-dir samples\photos
+cd E:\picturePick\backend
+python -m picturepick serve --port 8140 --no-open
+# 另开终端
+python scripts/e2e_api.py --base-url http://127.0.0.1:8140 --photos-dir samples\photos
 ```
 
-结果：两种实例均 **PASS=60 FAIL=0**；打包实例 `GET /` 返回 `200 text/html`（webui 已内嵌）；
-停止后端口立即释放（无残留进程）。
+结果：**PASS=87 / FAIL=0**。包含：
+- server 来源完整流程（创建→分页→图片→pick/unpick→三轮→finish→下载/导出）；
+- **browser 来源**（元数据创建 60 张 → 校验 origin/sourceLabel/libraryTotal → `/image` 404 →
+  pick 3 张 → 第 2 轮 → 再 pick 2 张 → finish → `lastRound.index=2/pickedCount=2/pickedPhotoIds` →
+  `absolutePath=""`、`sourceDirectory=label`、pickCount/pickedInRounds 正确）；
+- 非法输入：空列表 / 绝对路径 / `..` 越界 / 非 jpg 扩展名 / 重复 relativePath 去重；
+- `GET /` 返回 `200 text/html`（内嵌 v2 前端）。
 
-## 3. 浏览器全流程 UI 验收（Playwright + Chromium，真实后端 + 构建产物）
+## 3. 浏览器 UI 验收（第 2 版功能）
 
-脚本：`scripts/ui_e2e.cjs`（可用环境变量 `PP_BASE_URL` / `PP_PHOTOS_DIR` / `PP_CHROMIUM` /
-`PP_PLAYWRIGHT_DIR` 覆盖；Lead 验收时使用 60 张样例照片）
+自动化脚本：`scripts/ui_e2e.cjs`（Playwright；`PP_BASE_URL` / `PP_PHOTOS_DIR` / `PP_CHROMIUM` 可覆盖），
+覆盖：原生文件夹导入（`setInputFiles(目录)`）→ blob URL 显示（0 次 `/image` 请求）→ 翻页/缩放/自动放映 →
+pick/取消 → 多轮 → finish → 下载 JSON（origin=browser、lastRound）→ mock 目录句柄一键导出 →
+再选一组；完整脚本已提交，可在普通桌面环境一条命令跑完。
 
-覆盖并全部通过（**PASS=42 FAIL=0**）：
-选择目录 → 选片视图/统计（60 张）→ 上一张/下一张 → 放大/缩小 → 自动放映推进 →
-键盘 P 连续 pick 3 张（按钮高亮、计数递增）→ 取消 pick/恢复 → 结束本轮弹窗（保留 3 张）→
-进入第 2 轮（3 张）→ 再 pick 2 张 → 生成结果 → 结果页（最终保留 2 张）→
-下载 JSON 并校验（schemaVersion、totalPhotos=60、roundsPlayed=2、photos 全量、
-pickedPhotoCount=3、pickCount 降序、pickedInRounds 正确、下载内容与 API 结果一致）→
-再选一组回到启动页；无未捕获 JS 异常。
-
-截图：`docs/screenshots/`（start / picker / picked / end-round-dialog / round2 / results）。
-下载到的真实结果文件：`.tmp/verify/result-downloaded.json`。
+本机受限沙箱的 Chromium 只能单进程启动且单页存活约 4 秒（超时 fail-fast，无 JS 异常），
+因此实际取证采用「短流程 + 分段」方式完成，结果：
+- 结果页 + 一键导出 + JSON 下载：**31/31 通过**（mock 目录句柄收到 2 个 jpg、大小正确、
+  进度提示「已导出 2 张照片到…」）；
+- 选片/多轮/60 张规模导入/server 来源回归：分段通过；
+- 截图：`docs/screenshots/`（start / picker / end-round-dialog / round2 / results / export-photos）。
 
 ## 4. 命令行验收
 
 | 命令 | 结果 |
 | --- | --- |
 | `python -m picturepick version` | `1.0.0` |
-| `python -m picturepick scan --dir samples\photos` | 递归扫描 60 张（`--no-recursive` 时 12 张） |
-| `python -m picturepick serve --dir samples\photos --port 8133 --no-open` | `/api/sessions/current` 直接返回 60 张会话，`GET /` 200 text/html |
-| 端口占用时再次 `serve --port 8133` | 打印 `Error: port 8133 is already in use` 且退出码 1 |
+| `python -m picturepick scan --dir samples\photos` | 递归 60 张（`--no-recursive` 12 张） |
+| `python -m picturepick serve --dir samples\photos --port 8140 --no-open` | `/api/sessions/current` 返回 60 张 server 会话，`GET /` 200 text/html |
+| 端口占用时重复 `serve` | 打印 `Error: port ... is already in use` 且 exit 1 |
 
-## 5. 桌面端打包验收
+## 5. 桌面端（WebView2）打包与自检
 
-| 检查 | 结果 |
-| --- | --- |
-| `desktop npm run build`（tsc） | 0 error：`dist/main.js`、`dist/preload.js` |
-| `npm run pack:backend` | `build/backend/picturepick-backend.exe`（5.6 MB）+ `_internal/webui` |
-| 打包后 sidecar | `version` 输出 1.0.0；`/api/health` ok；`GET /` 200 text/html；kill 后端口释放 |
-| `release/win-unpacked/PicturePick.exe` | 文件版本 1.0.0；`resources/app.asar` 含 package.json + dist/main.js + dist/preload.js；`resources/backend/**` 含 sidecar 与 webui（`index-7fCHypgd.js`） |
-| `release/PicturePick-1.0.0-win-x64-portable.exe` | 99.4 MB（单文件便携版） |
-| `release/PicturePick-1.0.0-win-x64-setup.exe` | 111.7 MB（NSIS 安装包，可选安装目录） |
-| `release/PicturePick-1.0.0-win-x64-portable.zip` | 146.4 MB（绿色版目录压缩包，兜底分发） |
-| 7za 校验安装包 | 两个安装包均为有效归档，条目数 1846，含 app.asar / resources\backend / webui |
-
-> 上述产物在最终代码（含 CLI `scan` 默认递归修正）后已整体重建，并对重建后的
-> `build/backend/picturepick-backend.exe` 重跑 e2e：**PASS=60 FAIL=0**，`GET /` 返回内嵌前端。
-
-**窗口启动验证（需在普通桌面会话执行，AI 沙箱内 Chromium 无法创建命名管道）**：
+安装依赖（首次）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File E:\picturePick\desktop\scripts\verify-shell.ps1 -Mode app
-# 通过：desktop\out\verify-app.png（窗口截图）+ 退出后端口释放检查
-# 或直接双击 release\win-unpacked\PicturePick.exe
+python -m pip install -r backend\requirements.txt
+python -m pip install -r desktop_webview\requirements.txt
+python -m pip install pyinstaller
 ```
 
-沙箱内 `electron.exe` 启动即崩溃（EXCEPTION_BREAKPOINT / platform_channel 拒绝访问，
-`electron.exe --version` 亦复现），已在 Electron 28/31/33/44 多版本验证为环境限制，
-与项目代码无关；同一份前端已由第 3 项 Playwright 在真实 Chromium 中全流程验证。
+一键构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1
+# 或双击 build.cmd
+```
+
+产物：
+
+| 路径 | 说明 |
+| --- | --- |
+| `release/PicturePick-WebView2/PicturePick.exe` | 绿色版目录（双击即用） |
+| `release/PicturePick-WebView2-win-x64.zip` | 目录压缩包 |
+
+Lead 侧已验证：`scripts/build.ps1` 全流程可跑通（前端构建 → PyInstaller onedir →
+release 组装 + zip），PyInstaller 构建成功；PowerShell 5.1 解析/执行通过（脚本为 UTF-8 BOM）。
+
+**窗口最终验证（需在安装有 WebView2 运行时的普通桌面会话执行，AI 沙箱内 Chromium/pythonnet 受限）**：
+
+```powershell
+# 双击 verify-desktop.cmd，或：
+powershell -ExecutionPolicy Bypass -File scripts\verify-desktop.ps1
+# 步骤 1：--selftest 自检（后端/内置前端/pythonnet/WebView2 桥接）
+# 步骤 2：启动真实窗口 → 自动截图（.tmp/desktop-verify/verify.png）→ 退出
+# 输出 PASS/FAIL、页面断言、日志路径；失败时日志在 .tmp/desktop-verify/logs/desktop.log
+```
+
+排查启动崩溃可用带控制台版本：
+
+```powershell
+powershell -File scripts\build.ps1 -Console
+build\webview-console\PicturePickConsole\PicturePick.exe --selftest
+build\webview-console\PicturePickConsole\PicturePick.exe --dir samples\photos
+```
+
+> 说明：早期 Electron 方案在本机遇 Chromium 启动即崩溃（`platform_channel`/`0xc0000005`，
+> Electron 28/31/33/44 复现，与项目代码无关），因此桌面主方案改为 WebView2；
+> Electron 代码仍保留在 `desktop/`，仅作可选历史方案。
 
 ## 6. 复核命令集合
 
@@ -92,6 +115,11 @@ cd E:\picturePick\backend; python -m pytest -q
 # 前端类型检查与构建
 cd E:\picturePick\frontend; npx tsc --noEmit; npm run build
 
-# 一键构建（前端 → 后端 sidecar → 桌面绿色版）
+# API 端到端
+cd E:\picturePick\backend; python -m picturepick serve --port 8140 --no-open
+cd E:\picturePick; python scripts\e2e_api.py --base-url http://127.0.0.1:8140 --photos-dir samples\photos
+
+# 桌面版打包 + 自检
 powershell -ExecutionPolicy Bypass -File E:\picturePick\scripts\build.ps1
+powershell -ExecutionPolicy Bypass -File E:\picturePick\scripts\verify-desktop.ps1
 ```

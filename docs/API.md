@@ -6,11 +6,18 @@
 ## 0. 术语
 
 - **照片（photo）**：用户所选目录下扩展名为 `.jpg` / `.jpeg`（大小写不敏感）的普通文件。
-- **照片 ID**：`sha1(绝对路径字符串)[:16]` 的十六进制小写串，在会话内唯一、跨会话稳定。
+- **照片 ID**：`sha1(identity)[:16]` 的十六进制小写串。`identity` 在 server 来源会话中为绝对路径，
+  在 browser 来源会话中为相对路径。会话内唯一。
+- **会话来源（origin）**：`server`（后端扫描本机目录，图片由后端提供）或
+  `browser`（浏览器原生目录选择，文件只在浏览器内存中，后端仅保存照片元数据与轮次状态）。
 - **轮次（round）**：第 1 轮为全部照片；之后每一轮为上一轮被 pick 的照片。
 - **pickCount**：该照片在历史各轮中被 pick 的总次数（最终 JSON 记录此值）。
 - **viewed**：该照片在本轮是否被展示过（前端浏览到时上报）。
 - **phase**：`picking`（选片中）或 `finished`（已结束并生成结果）。
+
+> 说明：第 2 版起，浏览器 UI 使用**浏览器自带目录选择框**（`<input type="file" webkitdirectory>`），
+> 照片文件不会上传到后端；后端只接收照片元数据（相对路径/大小）用于轮次与 pick 计数。
+> CLI 的 `serve --dir` / 桌面端 `--dir` 仍使用 server 来源（后端扫描并提供图片）。
 
 ## 1. 通用错误格式
 
@@ -20,8 +27,8 @@
 { "detail": { "code": "INVALID_PATH", "message": "目录不存在或不可读" } }
 ```
 
-`code` 取值：`INVALID_PATH`、`NO_PHOTOS`、`SESSION_NOT_FOUND`、`PHOTO_NOT_FOUND`、
-`ROUND_NOT_FOUND`、`NOT_ENOUGH_PICKS`、`PHASE_FINISHED`、`DIALOG_UNAVAILABLE`、`WRITE_FAILED`。
+`code` 取值：`INVALID_PATH`、`NO_PHOTOS`、`INVALID_PHOTOS`、`TOO_MANY_PHOTOS`、`SESSION_NOT_FOUND`、
+`PHOTO_NOT_FOUND`、`ROUND_NOT_FOUND`、`NOT_ENOUGH_PICKS`、`PHASE_FINISHED`、`DIALOG_UNAVAILABLE`、`WRITE_FAILED`。
 
 ## 2. 数据结构
 
@@ -30,6 +37,8 @@
 ```json
 {
   "id": "9f2c...（32 位 hex）",
+  "origin": "server",
+  "sourceLabel": "E:\\photos",
   "root": "E:\\photos",
   "recursive": true,
   "createdAt": "2026-10-24T15:00:00+08:00",
@@ -47,7 +56,8 @@
 ```
 
 说明：`viewedCount` / `pickCount` 是**当前轮**的计数；`rounds[].pickedCount` 是**该轮** pick 数。
-`rounds[].pickedCount` 之和 > 0 时代表历史累计。
+`origin=server` 时 `root`/`sourceLabel` 为绝对目录路径；`origin=browser` 时为浏览器选择的文件夹名
+（例如 `"假期照片"`），仅作展示与结果 JSON 的来源标识。
 
 ### PhotoItem（分页列表项）
 
@@ -71,11 +81,17 @@
 {
   "schemaVersion": 1,
   "generatedAt": "2026-10-24T15:30:00+08:00",
+  "origin": "server",
   "sourceDirectory": "E:\\photos",
   "recursive": true,
   "totalPhotos": 120,
   "roundsPlayed": 3,
   "pickedPhotoCount": 12,
+  "lastRound": {
+    "index": 3,
+    "pickedCount": 2,
+    "pickedPhotoIds": ["a1b2c3d4e5f60718", "f0e1d2c3b4a59687"]
+  },
   "photos": [
     {
       "id": "a1b2c3d4e5f60718",
@@ -92,8 +108,16 @@
 - `photos` 包含**全部**扫到的照片（未 pick 的 `pickCount` 为 0），按 `pickCount desc, relativePath asc` 排序。
 - `pickedPhotoCount` = `pickCount > 0` 的照片数。
 - `pickedInRounds` 升序，记录该照片在第几轮被 pick。
+- `lastRound`：**最后一轮仍然保留**的照片，供前端「一键导出保留照片」使用；
+  `pickedPhotoIds` 顺序与当前轮照片顺序一致。
+- `absolutePath`：`origin=server` 时为绝对路径；`origin=browser` 时为空字符串（浏览器不暴露绝对路径，
+  来源以 `sourceDirectory` + `relativePath` 标识）。
+- 结果 JSON 的 `sourceDirectory` 在 `origin=browser` 时等于会话的 `sourceLabel`。
 
 ## 3. 系统接口
+
+> 第 2 版起浏览器 UI 不再使用本节的自定义目录浏览接口（改用浏览器自带目录选择框）；
+> 这些接口保留给 CLI/调试与向后兼容，前端不应在正常流程中调用。
 
 ### GET /api/health
 
@@ -144,13 +168,38 @@
 
 ### POST /api/sessions
 
-扫描目录并创建会话（同时激活为 current session）。
+创建会话（同时激活为 current session）。支持两种来源：
 
-请求：
+**A. browser（浏览器原生目录选择，推荐）**
+
+浏览器用 `<input type="file" webkitdirectory>` 让用户选择文件夹后，只把照片元数据发给后端：
 
 ```json
-{ "directory": "E:\\photos", "recursive": true }
+{
+  "source": "browser",
+  "label": "假期照片",
+  "recursive": true,
+  "photos": [
+    { "relativePath": "2024/IMG_001.jpg", "sizeBytes": 2845312, "lastModified": 1719999999000 },
+    { "relativePath": "IMG_002.jpeg", "sizeBytes": 1845312, "lastModified": 1719999998000 }
+  ]
+}
 ```
+
+- `label`：浏览器选择的根文件夹名，用于展示与结果 JSON 的 `sourceDirectory`。
+- `photos[].relativePath`：必须为相对路径（正斜杠 `/` 分隔，不允许以 `/`、盘符或 `..` 开头/包含越界段），
+  扩展名必须为 `.jpg` / `.jpeg`（大小写不敏感）。
+- 后端不读文件系统，照片 ID = `sha1(relativePath)[:16]`，`absolutePath` 为空字符串。
+- 校验失败：`INVALID_PHOTOS`（格式非法）、`TOO_MANY_PHOTOS`（> 50000 张）、`NO_PHOTOS`（空列表）。
+- 结果：201 + `SessionSummary`（`origin="browser"`，`root=label`）。
+
+**B. server（后端扫描本机目录，用于 CLI `--dir` / 桌面端 `--dir`）**
+
+```json
+{ "source": "server", "directory": "E:\\photos", "recursive": true }
+```
+
+`source` 省略时默认 `"server"`（向后兼容）。后端扫描目录并按绝对路径生成照片 ID。
 
 - 成功 → 201，返回 `SessionSummary`。
 - 目录不存在 / 不可读 → 400 `INVALID_PATH`。
@@ -165,6 +214,9 @@
 ```
 
 或 `{ "session": SessionSummary }`。
+
+> `origin=browser` 的会话在页面刷新后无法恢复照片文件（文件只存在于原页面内存中），
+> 前端发现 `current` 为 browser 会话且本地无文件映射时，应回到启动页并提示重新选择文件夹。
 
 ### GET /api/sessions/{sid}
 
@@ -188,7 +240,10 @@
 
 返回 `image/jpeg` 二进制。`variant` 默认 `original`；`thumb` 返回最长边 ≤ 512 的缩略图。
 响应头 `Cache-Control: public, max-age=3600`。
-照片不属于会话 / 文件已不存在 → 404 `PHOTO_NOT_FOUND`。
+
+- **仅 `origin=server` 会话可用**；`origin=browser` 会话的照片由前端用浏览器本地 `File` 对象显示，
+  调用该接口返回 404 `PHOTO_NOT_FOUND`。
+- 照片不属于会话 / 文件已不存在 → 404 `PHOTO_NOT_FOUND`。
 
 ### POST /api/sessions/{sid}/photos/{pid}/viewed
 
@@ -267,3 +322,32 @@ python -m picturepick version
 - 入口：`picturepick.cli:main`，打包后支持同样的 `serve` / `scan` / `version` 子命令。
 - 打包数据：`picturepick/webui/**` 必须内嵌，运行时通过 `sys._MEIPASS/webui` 定位。
 - 启动参数由桌面端传入：`serve --port <port> --no-browser --no-open ...`（`--no-open` 与 `--no-browser` 均为等价别名，至少支持 `--no-open`）。
+
+## 8. 浏览器端行为约定（第 2 版新增）
+
+### 8.1 打开照片目录
+
+- **必须使用浏览器原生文件选择框**：页面中隐藏一个
+  `<input type="file" webkitdirectory multiple accept=".jpg,.jpeg,image/jpeg">`，
+  用户点击「选择照片文件夹」按钮时调用 `input.click()`，由浏览器弹出系统文件夹选择框。
+- 前端不得再实现自定义目录浏览弹窗，也不得调用后端 `/api/fs/*` 或 `/api/dialog/*` 来选择照片目录。
+- 选中后前端遍历 `input.files`，仅保留 `.jpg` / `.jpeg`（大小写不敏感），
+  以 `webkitRelativePath` 作为 `relativePath`，按路径不区分大小写排序，然后调用
+  `POST /api/sessions`（`source="browser"`）创建会话。
+- 照片显示：浏览器端通过 `URL.createObjectURL(file)` 生成图片 URL，不请求后端图片接口；
+  离开/重选目录时必须 `URL.revokeObjectURL` 释放。
+
+### 8.2 一键导出「最后一轮保留的照片」
+
+结果页提供按钮（`data-testid="export-photos"`），把 `PickResult.lastRound.pickedPhotoIds`
+对应的照片保存到用户指定的文件夹：
+
+- 首选浏览器 **File System Access API**：`window.showDirectoryPicker({ mode: "readwrite" })`
+  让用户选择目标文件夹，然后对每张照片 `getFileHandle(name, { create: true })` →
+  `createWritable()` → 写入 Blob → `close()`；同名文件自动追加 `-1`、`-2` 等后缀。
+- 照片 Blob 来源：`origin=browser` 用内存中的 `File`；`origin=server` 用
+  `fetch(/api/sessions/{sid}/photos/{pid}/image)` 取得。
+- 浏览器不支持 `showDirectoryPicker` 时降级：逐张触发浏览器下载（`<a download>`），并提示用户。
+- 导出过程需在 UI 上显示进度；完成后提示保存的文件夹名与文件数。
+- 自动化测试约定：若 `window.__picturepickTestExportDirHandle` 存在，优先使用它作为目标目录句柄
+  （测试注入的 mock，不调用真实选择框）。

@@ -55,6 +55,16 @@ def main() -> int:
     expected = sorted(
         p for p in Path(photos_dir).rglob("*") if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg"}
     )
+    browser_photos = []
+    for p in expected:
+        stat = p.stat()
+        browser_photos.append(
+            {
+                "relativePath": p.relative_to(Path(photos_dir)).as_posix(),
+                "sizeBytes": stat.st_size,
+                "lastModified": int(stat.st_mtime * 1000),
+            }
+        )
     print(f"照片目录: {photos_dir}  (期望 {len(expected)} 张 jpg/jpeg)")
 
     with httpx.Client(base_url=base, timeout=30.0) as c:
@@ -198,6 +208,89 @@ def main() -> int:
             check("index.html 含挂载点", "__PICTUREPICK" in root.text or 'id="app"' in root.text or "<script" in root.text)
         else:
             print("  INFO  前端尚未构建（/ 返回 JSON 提示），静态资源检查跳过")
+
+        print("\n[11] 浏览器来源会话（browser）与一键导出所需字段")
+        empty = c.post("/api/sessions", json={"source": "browser", "label": "空", "photos": []})
+        check("空照片列表 400 NO_PHOTOS", expect_error(empty, 400, "NO_PHOTOS"), empty.text[:200])
+        bad_abs = c.post(
+            "/api/sessions",
+            json={"source": "browser", "label": "x", "photos": [{"relativePath": "C:/evil.jpg", "sizeBytes": 1}]},
+        )
+        check("绝对路径 400 INVALID_PHOTOS", expect_error(bad_abs, 400, "INVALID_PHOTOS"), bad_abs.text[:200])
+        bad_dotdot = c.post(
+            "/api/sessions",
+            json={"source": "browser", "label": "x", "photos": [{"relativePath": "../evil.jpg", "sizeBytes": 1}]},
+        )
+        check("越界路径 400 INVALID_PHOTOS", expect_error(bad_dotdot, 400, "INVALID_PHOTOS"), bad_dotdot.text[:200])
+        bad_ext = c.post(
+            "/api/sessions",
+            json={"source": "browser", "label": "x", "photos": [{"relativePath": "a/b.png", "sizeBytes": 1}]},
+        )
+        check("非 jpg 扩展名 400 INVALID_PHOTOS", expect_error(bad_ext, 400, "INVALID_PHOTOS"), bad_ext.text[:200])
+        dup = c.post(
+            "/api/sessions",
+            json={
+                "source": "browser",
+                "label": "去重",
+                "photos": [
+                    {"relativePath": "a.jpg", "sizeBytes": 10},
+                    {"relativePath": "a.jpg", "sizeBytes": 10},
+                ],
+            },
+        )
+        check("重复 relativePath 去重后 201 且 1 张", dup.status_code == 201 and dup.json()["libraryTotal"] == 1, dup.text[:300])
+
+        br = c.post(
+            "/api/sessions",
+            json={"source": "browser", "label": "样例相册", "recursive": True, "photos": browser_photos},
+        )
+        check("browser 会话 201", br.status_code == 201, br.text[:300])
+        bs = br.json()
+        bsid = bs["id"]
+        check("origin=browser", bs.get("origin") == "browser", json.dumps(bs)[:300])
+        check("sourceLabel/root 为文件夹名", bs.get("sourceLabel") == "样例相册" and bs.get("root") == "样例相册", json.dumps(bs)[:300])
+        check("libraryTotal 与文件数一致", bs["libraryTotal"] == len(expected), f"{bs['libraryTotal']} vs {len(expected)}")
+        bpage = c.get(f"/api/sessions/{bsid}/rounds/1/photos", params={"limit": 1000}).json()
+        bphotos = bpage["photos"]
+        check("browser 照片列表完整", bpage["total"] == len(expected) and len(bphotos) == len(expected))
+        check("browser 照片名为 jpg/jpeg", all(p["name"].lower().endswith((".jpg", ".jpeg")) for p in bphotos))
+        check("browser 照片 ID 互不相同", len({p["id"] for p in bphotos}) == len(bphotos))
+        img = c.get(f"/api/sessions/{bsid}/photos/{bphotos[0]['id']}/image")
+        check("browser 会话图片接口 404 PHOTO_NOT_FOUND", expect_error(img, 404, "PHOTO_NOT_FOUND"), img.text[:200])
+
+        for p in bphotos[:3]:
+            r = c.put(f"/api/sessions/{bsid}/photos/{p['id']}/pick")
+            check(f"browser pick {p['name']}", r.status_code == 200, r.text[:200])
+        bnext = c.post(f"/api/sessions/{bsid}/rounds/next")
+        check("browser 进入第 2 轮", bnext.status_code == 200 and bnext.json()["roundPhotoCount"] == 3, bnext.text[:300])
+        br2 = c.get(f"/api/sessions/{bsid}/rounds/2/photos").json()["photos"]
+        check("第 2 轮为已 pick 的 3 张", {p["id"] for p in br2} == {p["id"] for p in bphotos[:3]})
+        for p in br2[:2]:
+            c.put(f"/api/sessions/{bsid}/photos/{p['id']}/pick")
+        bfin = c.post(f"/api/sessions/{bsid}/finish")
+        check("browser finish 200", bfin.status_code == 200, bfin.text[:300])
+        bres = bfin.json()["result"]
+        check("结果 origin=browser", bres.get("origin") == "browser", str(bres.get("origin")))
+        check("结果 sourceDirectory=sourceLabel", bres.get("sourceDirectory") == "样例相册", str(bres.get("sourceDirectory")))
+        check("browser 结果 absolutePath 为空串", all(p["absolutePath"] == "" for p in bres["photos"]))
+        last = bres.get("lastRound") or {}
+        check("lastRound.index=2", last.get("index") == 2, json.dumps(last)[:200])
+        check("lastRound.pickedCount=2", last.get("pickedCount") == 2, json.dumps(last)[:200])
+        check(
+            "lastRound.pickedPhotoIds 为本轮 pick 的照片",
+            last.get("pickedPhotoIds") == [br2[0]["id"], br2[1]["id"]],
+            json.dumps(last)[:300],
+        )
+        bby = {p["id"]: p for p in bres["photos"]}
+        check(
+            "browser pickCount/pickedInRounds 正确",
+            bby[bphotos[0]["id"]]["pickCount"] == 2
+            and bby[bphotos[0]["id"]]["pickedInRounds"] == [1, 2]
+            and bby[bphotos[2]["id"]]["pickCount"] == 1,
+            json.dumps({k: bby[k]["pickCount"] for k in [p["id"] for p in bphotos[:3]]}),
+        )
+        getres = c.get(f"/api/sessions/{bsid}/result")
+        check("GET browser result 200 且含 lastRound", getres.status_code == 200 and "lastRound" in getres.json())
 
     print(f"\n===== E2E 结果: PASS={PASS} FAIL={FAIL} =====")
     return 0 if FAIL == 0 else 1

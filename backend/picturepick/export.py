@@ -1,4 +1,10 @@
-"""最终结果（PickResult）生成、下载文件名与导出写盘（docs/API.md §2、§4）。"""
+"""最终结果（PickResult）生成、下载文件名与导出写盘（docs/API.md 第 2 版 §2、§4）。
+
+第 2 版：
+* PickResult 带 ``origin`` 与 ``lastRound``（最后一轮仍保留的照片，供前端一键导出）；
+* ``origin=browser`` 时 ``sourceDirectory`` 等于会话 ``sourceLabel``，
+  ``photos[].absolutePath`` 为空串；``origin=server`` 保持绝对路径与目录。
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
 from .errors import WRITE_FAILED, ApiError
-from .models import PickResult, PickResultPhoto
+from .models import LastRound, PickResult, PickResultPhoto
 
 if TYPE_CHECKING:  # 仅类型检查时导入，避免 session <-> export 循环依赖
     from .session import Session
@@ -27,6 +33,17 @@ def now_local() -> datetime:
 def isoformat(moment: datetime) -> str:
     """ISO-8601，秒精度，带时区：``2026-10-24T15:00:00+08:00``。"""
     return moment.isoformat(timespec="seconds")
+
+
+def build_last_round(session: "Session") -> LastRound:
+    """最后一轮仍被 pick 的照片 id，顺序与该轮照片顺序一致。"""
+    round_ = session.current_round
+    picked_ids = [photo_id for photo_id in round_.photo_ids if photo_id in round_.picked]
+    return LastRound(
+        index=round_.index,
+        pickedCount=len(picked_ids),
+        pickedPhotoIds=picked_ids,
+    )
 
 
 def build_result(session: "Session") -> PickResult:
@@ -50,11 +67,13 @@ def build_result(session: "Session") -> PickResult:
     return PickResult(
         schemaVersion=1,
         generatedAt=isoformat(now_local()),
-        sourceDirectory=session.root,
+        origin=session.origin,
+        sourceDirectory=session.source_label,
         recursive=session.recursive,
         totalPhotos=len(photos),
         roundsPlayed=len(session.rounds),
         pickedPhotoCount=sum(1 for item in photos if item.pickCount > 0),
+        lastRound=build_last_round(session),
         photos=photos,
     )
 
