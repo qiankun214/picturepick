@@ -97,6 +97,19 @@ function buildFrame(options: {
   return frame;
 }
 
+/** 只允许 http(s) 外链，避免 javascript: 等危险 URL。 */
+function safeExternalUrl(raw: string | null | undefined): string | null {
+  const text = String(raw ?? '').trim();
+  if (!text) return null;
+  try {
+    const url = new URL(text);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 /** 同时展示「原照片」与「AI 提供的参考照片」的对照区。 */
 function buildCompare(task: BirdTask, sessionId: string): HTMLElement {
   const compare = document.createElement('div');
@@ -116,17 +129,31 @@ function buildCompare(task: BirdTask, sessionId: string): HTMLElement {
   const note =
     String(task.result?.referenceNote ?? '').trim() ||
     'AI 未能提供可访问的参考照片（可在方舟控制台开通「联网搜索」插件后重试）';
-  compare.appendChild(
-    buildFrame({
-      testId: 'bird-reference-image',
-      alt: task.result?.species ? `${task.result.species} 的参考照片` : '参考照片',
-      caption: '参考照片（AI 提供）',
-      src: hasReference
-        ? String(task.referenceUrl || birdTaskReferenceUrl(sessionId, task.id))
-        : undefined,
-      placeholder: note,
-    }),
-  );
+  const referenceFrame = buildFrame({
+    testId: 'bird-reference-image',
+    alt: task.result?.species ? `${task.result.species} 的参考照片` : '参考照片',
+    caption: '参考照片（AI 提供）',
+    src: hasReference
+      ? String(task.referenceUrl || birdTaskReferenceUrl(sessionId, task.id))
+      : undefined,
+    placeholder: note,
+  });
+
+  // AI 只给了网页链接/图片无法下载时，直接展示可点击的参考链接，让用户自己打开确认
+  const pageUrl = safeExternalUrl(task.result?.referencePageUrl);
+  if (pageUrl) {
+    const link = document.createElement('a');
+    link.className = 'bird-result__link';
+    link.dataset.testid = 'bird-reference-link';
+    link.href = pageUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = hasReference ? '查看 AI 参考来源页面 ↗' : '打开 AI 提供的参考链接 ↗';
+    const placeholder = referenceFrame.querySelector<HTMLElement>('.bird-result__placeholder');
+    if (!hasReference && placeholder) placeholder.appendChild(link);
+    else referenceFrame.appendChild(link);
+  }
+  compare.appendChild(referenceFrame);
   return compare;
 }
 

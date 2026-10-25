@@ -168,7 +168,9 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
    （`AI 识鸟队列`），显示排队位置 / 识别进度 / 耗时。提交后可以继续选片、可以继续提交下一张。
 2. **查看结果**：点击队列卡片打开结果模态框——顶部并排显示**原照片**（左）与**参考照片（AI 提供）**
    （右），下方显示种 / 科 / 属（中文 + 拉丁）、置信度、识别依据、备选鸟种与模型名；
-   参考图缺失时右框显示原因或开通提示；失败/进度模态框也显示原照片；右上角 X 可关闭。
+   参考图缺失时右框显示原因或开通提示；**如果 AI 只给了网页/页面链接、没有可下载的图片文件，
+   右框会直接显示可点击的「打开 AI 提供的参考链接 ↗」（新标签打开）**，可自行查看确认；
+   失败/进度模态框也显示原照片；右上角 X 可关闭。
 3. **采纳**：点「采纳并写入 EXIF」→ 识别结果立即写入**结果 JSON**（`photos[].bird` 与
    `birdIdentifiedCount`）并尝试写入**照片 EXIF**；之后再次浏览这张照片，左侧图片信息栏的
    「鸟类识别」块会显示鸟种（无识别时提示「尚未识别 · 按 B 调用 AI 识鸟」）。
@@ -334,7 +336,7 @@ E:\picturePick\
 ├── backend/                  # Python 后端（FastAPI + uvicorn + Pillow）
 │   ├── picturepick/          # app / api / models / scanner / session / export / imaging / fsbrowse / cli
 │   │   └── birdid/           # AI 识鸟：config / client / parser / prompt / reference / exif / tasks / service
-│   ├── tests/                # pytest（282 个用例）
+│   ├── tests/                # pytest（285 个用例）
 │   └── pyproject.toml / requirements.txt
 ├── frontend/                 # TypeScript + Vite 前端（原生 DOM，无框架）
 │   └── src/                  # main / api / directory(取目录路径) / viewer / ui/*（ui/bird/* 为 AI 识鸟界面）
@@ -391,9 +393,9 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithIn
 
 | 项目 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端单元/接口 | `cd backend; python -m pytest -q` | **282 passed**（含 AI 识鸟配置/完整端点双协议/任务/EXIF/解析/AI 参考图与联网搜索降级/SSRF/恢复/客户端容错） |
+| 后端单元/接口 | `cd backend; python -m pytest -q` | **285 passed**（含 AI 识鸟配置/完整端点双协议/任务/EXIF/解析/AI 参考图与联网搜索降级/SSRF/恢复/客户端容错） |
 | API 端到端（server/browser + export-photos + restore/resume + 旧版 JSON 兼容 + AI 识鸟 mock 链路） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | **PASS=238 / FAIL=0**（v4 既有 133 + AI 识鸟新增 105；mock 后端 8126） |
-| 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | **PASS=113 / FAIL=0**（v4 既有 71 + AI 识鸟新增 42；含快捷键 B、队列、原照片+参考照片对照、模态框 X 关闭、端点设置、左栏鸟种、结果页计数） |
+| 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | **PASS=115 / FAIL=0**（v4 既有 71 + AI 识鸟新增 44；含快捷键 B、队列、原照片+参考照片对照、模态框 X 关闭、端点设置、左栏鸟种、结果页计数） |
 | **真实 Key UI 全流程（非 mock）** | 真实方舟 Key + 真实网络（本机验证，脚本与截图在 `.tmp/` 下） | **PASS=15 / FAIL=0**（识鸟→AI 参考图→X 关闭→重开→采纳→左栏鸟种→结果页计数→结果 JSON） |
 | 桌面版 | `powershell -File scripts\verify-desktop.ps1` | 后端冻结自检通过；GUI 窗口验证进行中（见下） |
 

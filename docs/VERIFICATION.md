@@ -9,9 +9,9 @@ pywebview 6.2.1 / pythonnet 3.1.0 / Vite 5.4.21 / TypeScript 5.x。
 
 | 项目 | 结果 |
 | --- | --- |
-| 后端单元/接口（pytest） | **282 passed**（v4 既有 179 全过 + 新增 103 个 AI 识鸟用例，含端点协议/模型参考图/ToolNotOpen 降级/SSRF） |
+| 后端单元/接口（pytest） | **285 passed**（v4 既有 179 全过 + 新增 106 个 AI 识鸟用例，含端点协议/模型参考图/ToolNotOpen 降级/SSRF） |
 | API 端到端 `scripts/e2e_api.py` | **PASS=238 / FAIL=0**（v4 既有 133 全过 + 新增 105 项 AI 识鸟检查） |
-| 浏览器 UI `scripts/ui_e2e.cjs` | **PASS=113 / FAIL=0**（v4 既有 71 项全过 + AI 识鸟章节新增 42 项；日志 `.tmp/verify/ui-e2e-result.txt` 末尾 `ALL_PASS`） |
+| 浏览器 UI `scripts/ui_e2e.cjs` | **PASS=115 / FAIL=0**（v4 既有 71 项全过 + AI 识鸟章节新增 44 项；日志 `.tmp/verify/ui-e2e-result.txt` 末尾 `ALL_PASS`） |
 | 前端构建 | `npx tsc --noEmit` + `npm run build` 通过（v5.2 前端构建，产物在 `backend/picturepick/webui`） |
 | 截图 | `bird-queue.png` / `bird-result.png` / `bird-info.png` / `bird-results.png` 已重新生成（模拟模式，1440×900），见 §7.4 |
 | 真实 Key / 真实网络 | **双协议端点直连** + **模型 API 联网返回真实参考图** 已实测（插件已开通；真实参考图下载 32KB/2.09s，见 §7.7） |
@@ -29,7 +29,7 @@ cd E:\picturePick\backend
 python -m pytest -q
 ```
 
-结果：**282 passed**（v4 的 179 个用例全部保留/按新字段调整后通过 + 新增 103 个 AI 识鸟用例，
+结果：**285 passed**（v4 的 179 个用例全部保留/按新字段调整后通过 + 新增 106 个 AI 识鸟用例，
 分布在 `tests/test_bird_config.py`、`test_bird_tasks.py`、`test_bird_exif.py`、`test_bird_parser.py`、
 `test_bird_client.py`、`test_bird_reference.py`、`test_bird_result.py`）。
 
@@ -120,8 +120,8 @@ python scripts\e2e_api.py --base-url http://127.0.0.1:8126 --photos-dir samples\
 自动化脚本：`scripts/ui_e2e.cjs`（Playwright；`PP_BASE_URL` / `PP_PHOTOS_DIR` / `PP_CHROMIUM` 可覆盖），
 后端以 `PICTUREPICK_BIRD_MOCK=1` 启动（前端不伪造识别结果，e2e 使用真实接口 + 模拟模型）。
 
-结果：**PASS=113 / FAIL=0**（Lead 在普通桌面会话用 Playwright Chromium 跑通；v4 既有 71 项全过，
-AI 识鸟章节新增 42 项全部通过；日志 `.tmp/verify/ui-e2e-result.txt` 末尾 `ALL_PASS`）。
+结果：**PASS=115 / FAIL=0**（Lead 在普通桌面会话用 Playwright Chromium 跑通；v4 既有 71 项全过，
+AI 识鸟章节新增 44 项全部通过；日志 `.tmp/verify/ui-e2e-result.txt` 末尾 `ALL_PASS`）。
 > 说明：本机 AI 沙箱内 Chromium 启动受限（`platform_channel` 拒绝访问 / 锁文件在临时目录），
 > 通过把 `TMP`/`TEMP` 指到工作区目录并在完整权限会话运行后通过；复现命令见 §6。
 
@@ -132,7 +132,7 @@ v4 既有覆盖（保留）：启动页只有「选择照片文件夹」、不�
 后端复制 → 磁盘文件名与内容逐字节一致）；载入 JSON 恢复现场（restore-notice、restored=true）；
 继续筛选（resume → 第 3 轮、总数=最后一轮保留数）。
 
-v5 新增覆盖（AI 识鸟章节，合计新增 42 项检查；v4 71 项 + 42 = 最终 **PASS=113**）：
+v5 新增覆盖（AI 识鸟章节，合计新增 44 项检查；v4 71 项 + 44 = 最终 **PASS=115**）：
 
 - 选片页三栏：左 `photo-info`（含 `bird-info-empty`）、中 stage、右 `bird-queue`；窗口变窄左右栏可折叠；
 - 顶部 `bird-identify-button` 存在且带 `B` 提示；设置入口 `bird-settings-button` 可打开
@@ -262,10 +262,10 @@ powershell -ExecutionPolicy Bypass -File E:\picturePick\scripts\verify-desktop.p
 
 ## 7. 第 5.2 版 AI 识鸟验收明细（新增）
 
-### 7.1 pytest（282 passed）
+### 7.1 pytest（285 passed）
 
 - v4 既有 179 全过（新字段为可选字段，不破坏旧断言；`PhotoItem`/`PickResult` 断言按需包含 `bird`）。
-- 新增 103 个用例，集中于 7 个 `test_bird_*.py`，覆盖契约 `docs/BIRDID-CONTRACT.md`
+- 新增 106 个用例，集中于 7 个 `test_bird_*.py`，覆盖契约 `docs/BIRDID-CONTRACT.md`
   §2 配置/端点、§4 调用/双协议/`web_search`/`ToolNotOpen`/解析/模型参考图、§5 任务队列、§7 EXIF、
   §6.3 结果 JSON/restore、§9 模拟模式与失败路径；其中含 **端点协议（chat/responses、无效端点）**、
   **模型提供参考图 URL（不搜索图源）**、**ToolNotOpen 自动降级**、**SSRF 防护** 等用例。
@@ -277,10 +277,10 @@ powershell -ExecutionPolicy Bypass -File E:\picturePick\scripts\verify-desktop.p
 - 全部使用 `PICTUREPICK_BIRD_MOCK=1`，确定性结果、无需网络与 Key（mock 参考图为内存生成示意图，
   不依赖方舟联网搜索插件）；EXIF 断言用 Pillow 读回标签并校验**原图图像数据字节不变**。
 
-### 7.3 UI e2e（PASS=113 / FAIL=0）
+### 7.3 UI e2e（PASS=115 / FAIL=0）
 
-- Lead 在普通桌面会话（Playwright Chromium + mock 后端 8130）完整跑通：**PASS=113 / FAIL=0**，
-  日志 `.tmp/verify/ui-e2e-result.txt` 末尾 `ALL_PASS`；v4 既有 71 项全过，AI 识鸟章节新增 **42 项**
+- Lead 在普通桌面会话（Playwright Chromium + mock 后端 8130）完整跑通：**PASS=115 / FAIL=0**，
+  日志 `.tmp/verify/ui-e2e-result.txt` 末尾 `ALL_PASS`；v4 既有 71 项全过，AI 识鸟章节新增 **44 项**
   全过（含完整端点设置、结果模态框**原照片 + 参考照片并排对照**、`bird-original-image` 走原图接口、
   `modal-close` X 关闭、左栏鸟种与结果页计数）。
 - 本机 AI 沙箱内 Chromium 受 `platform_channel`/临时目录锁文件限制；通过把 `TMP`/`TEMP` 指到工作区
@@ -338,6 +338,9 @@ powershell -ExecutionPolicy Bypass -File E:\picturePick\scripts\verify-desktop.p
     而是把该 URL 作为「不要重复」的反馈再次要求模型给图片文件直链（最多再请求 2 次），仍失败则无参考图；
     pytest 覆盖「首轮网页 → 第一次重试仍网页 → 第二次重试给图片 → 下载成功」
     （`test_page_url_is_rejected_and_model_asked_again`）。
+  - **AI 只给网页链接时**：结果保留 `result.referencePageUrl`，前端在参考图占位处渲染可点击链接
+    （`data-testid="bird-reference-link"`，`target=_blank` + `noopener`），用户可直接打开确认；
+    UI e2e 通过接口拦截模拟「无图片、仅网页链接」场景并验证链接可点击（+2 项检查）。
 - **真实 UI 全流程（真实 Key + 真实网络，非 mock）：PASS=15 / FAIL=0**
   - 测试连接 → 识鸟（白鹭 / 鹭科 / 白鹭属，置信度 **90%**）→ 结果模态框左「原照片」右「参考照片（AI 提供）」
     并排、参考图 `naturalWidth > 0` → 点击右上角 X 关闭 → 重新打开 → 采纳 → 左栏显示鸟种 →

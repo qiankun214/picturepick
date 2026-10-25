@@ -194,6 +194,8 @@ export interface BirdResult {
   alternatives: BirdAlternative[];
   referenceSource: string;
   referenceNote: string;
+  /** AI 提供的参考来源链接（可能是图片直链或网页；无法显示图片时供用户点击查看）。 */
+  referencePageUrl?: string;
 }
 
 export interface BirdTask {

@@ -241,6 +241,8 @@ class BirdService:
             if reference is None and not search_error:
                 # 首轮给的可能是网页/维基/不可下载链接：把已拒绝的 URL 带上，再让模型联网
                 # 重新要「图片文件本身的直链」（最多再请求 2 次，要求不能重复不合格链接）。
+                if initial_url and not parsed.result.referencePageUrl:
+                    parsed.result.referencePageUrl = initial_url
                 rejected: list[str] = []
                 if initial_url:
                     rejected.append(initial_url)
@@ -256,6 +258,16 @@ class BirdService:
                         url = str(found["referenceImageUrl"]).strip()
                         if not url:
                             break
+                        # 保留 AI 提供的参考来源链接：无图片可显示时前端让用户点击查看
+                        page = str(found.get("referencePageUrl") or "").strip()
+                        if not page:
+                            note = str(found.get("referenceNote") or "").strip()
+                            if note.lower().startswith(("http://", "https://")):
+                                page = note
+                        if page:
+                            parsed.result.referencePageUrl = page
+                        elif not parsed.result.referencePageUrl:
+                            parsed.result.referencePageUrl = url
                         if is_probably_webpage_url(url):
                             rejected.append(url)
                             continue

@@ -211,6 +211,8 @@ Content-Type: application/json
 8. **网页地址拒绝**：模型给出的 URL 若是网页（`.htm/.html` 结尾或含 `/wiki/`、`/item/`、`/cpjc/`），
    后端不下载，直接加入 `rejected` 并以「不要重复」提示让模型重新检索（最多再请求 2 次）；
    仍无图片文件直链 → 无参考图，`referenceNote` 写「AI 未能提供可访问的参考图片文件直链」。
+9. **AI 参考链接兜底**：模型提供的 URL 始终保留在 `BirdResult.referencePageUrl`（网页或图片直链）；
+   前端在参考图缺失时渲染可点击链接 `bird-reference-link`（新标签、`noopener`），用户可打开确认。
 
 ## 5. 任务队列
 
@@ -555,11 +557,11 @@ footer.dock                        ← 原底部工具栏 + filmstrip 原样
 
 ## 10. 验收结果（v5.2，2026-10-25）
 
-- `pytest`：**282 passed**（既有 179 + 新增 103：配置/端点双协议/任务/EXIF 保真/解析/
+- `pytest`：**285 passed**（既有 179 + 新增 106：配置/端点双协议/任务/EXIF 保真/解析/
   模型参考图/ToolNotOpen 降级/SSRF 防护/结果恢复/客户端容错）。
 - `scripts/e2e_api.py`：**PASS=238 / FAIL=0**（既有 133 + 新增 105 项识鸟检查：
   status/config/endpoint/tasks/adopt/EXIF/reference/result/restore/dismiss/失败路径）。
-- `scripts/ui_e2e.cjs`：**PASS=113 / FAIL=0**（既有 71 + 新增 42 项：按钮/快捷键 B/队列卡片/
+- `scripts/ui_e2e.cjs`：**PASS=115 / FAIL=0**（既有 71 + 新增 44 项：按钮/快捷键 B/队列卡片/
   进度/原照片+参考照片并排对照/模态框 X 关闭/参考图/采纳/左栏鸟种/结果页计数/完整端点设置；
   Playwright Chromium + mock 后端）。
 - `frontend`：`npm run build`（tsc + vite）通过。

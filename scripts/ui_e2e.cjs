@@ -543,6 +543,41 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.waitForSelector(ui('bird-result-modal'), { state: 'detached', timeout: 10000 });
   check('点击右上角 X 可以关闭结果卡片', (await page.locator(ui('bird-result-modal')).count()) === 0);
 
+  // AI 只给网页链接、没有可下载图片时：显示可点击的参考链接
+  const PAGE_URL = 'https://www.snhm.org.cn/cpjc/info.htm?eid=983';
+  const taskListPattern = '**/api/sessions/*/bird-tasks';
+  await page.route(taskListPattern, async (route) => {
+    try {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (Array.isArray(body.tasks)) {
+        body.tasks = body.tasks.map((task) => (task.id === task1.id
+          ? {
+            ...task,
+            referenceAvailable: false,
+            referenceUrl: null,
+            result: { ...task.result, referencePageUrl: PAGE_URL },
+          }
+          : task));
+      }
+      await route.fulfill({ response, json: body });
+    } catch {
+      await route.continue();
+    }
+  });
+  await page.waitForTimeout(1600);
+  await page.click(cardSelector(task1.id));
+  await page.waitForSelector(ui('bird-reference-link'), { timeout: 10000 });
+  const fallbackLink = String((await page.getAttribute(ui('bird-reference-link'), 'href')) || '');
+  check('AI 无图片时显示可点击的参考链接', fallbackLink.includes('snhm.org.cn'), fallbackLink.slice(0, 160));
+  check('参考链接在新窗口打开且带 noopener',
+    (await page.getAttribute(ui('bird-reference-link'), 'target')) === '_blank'
+    && String((await page.getAttribute(ui('bird-reference-link'), 'rel')) || '').includes('noopener'));
+  await page.click(ui('modal-close'));
+  await page.waitForSelector(ui('bird-result-modal'), { state: 'detached', timeout: 10000 });
+  await page.unroute(taskListPattern);
+  await page.waitForTimeout(1600);
+
   await page.click(cardSelector(task1.id));
   await page.waitForSelector(ui('bird-result-modal'), { timeout: 10000 });
   await page.waitForSelector(ui('bird-original-image'), { timeout: 10000 });

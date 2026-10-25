@@ -3856,6 +3856,23 @@ body:has(.picker) .toast-stack {
   overflow-wrap: anywhere;
 }
 
+.bird-result__link {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 5px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.bird-result__link:hover {
+  background: var(--accent-soft);
+  text-decoration: underline;
+}
+
 @media (max-width: 760px) {
   .bird-result__compare {
     grid-template-columns: minmax(0, 1fr);

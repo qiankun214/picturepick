@@ -81,6 +81,8 @@ class BirdResult(BaseModel):
     alternatives: List[BirdAlternative] = Field(default_factory=list)
     referenceSource: str = ""
     referenceNote: str = ""
+    #: AI 提供的参考来源链接（可能是图片直链，也可能只是网页；供无法显示图片时点击查看）
+    referencePageUrl: str = ""
 
 
 class BirdObservation(BaseModel):

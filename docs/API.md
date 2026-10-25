@@ -235,16 +235,21 @@
     { "species": "黄嘴白鹭", "speciesLatin": "Egretta eulophotes", "confidence": 0.04 }
   ],
   "referenceSource": "中国鸟类图库",
-  "referenceNote": "参考照片中该鸟的典型特征"
+  "referenceNote": "参考照片中该鸟的典型特征",
+  "referencePageUrl": "https://www.example.com/egret"
 }
 ```
+
+- `referencePageUrl`：AI 提供的参考来源链接（`referenceImageUrl` 是网页时即该网页地址；是图片直链时
+  为图片地址或模型给的来源页面）。**图片无法下载/显示时**前端用它渲染可点击链接
+  `data-testid="bird-reference-link"`，用户可新标签打开确认。
 
 - `identified=false` 时 `reason` 为模型给出的原因（非空），其余分类字段为空、`alternatives` 为空；
   此类任务**不可采纳**（`BIRD_RESULT_UNAVAILABLE`），前端只提供「忽略 / 关闭」。
 - 所有字符串字段均已 `strip` 并截断（≤ 200 字符）；`confidence` 夹到 `[0,1]`，非数字为 `null`；
   `alternatives` 最多 3 条且只保留 `species` 非空的项。
-- `referenceSource` 为参考照片来源标签（模型给出的来源站点，如 `维基百科`、`中国鸟类图库`；模拟模式为
-  `Mock Reference`）。
+- `referenceSource` 为参考照片来源标签（模型给出的来源站点，如 `中国鸟类图库`、`上海自然博物馆`；
+  模拟模式为 `Mock Reference`）。
 - `referenceNote`：参考照片说明/来源页面；**参考图缺失时**（如账号未开通「联网搜索」插件）后端会写入
   开通提示（含方舟控制台链接），前端在参考图占位处展示该文本。
 
@@ -823,7 +828,9 @@ footer.dock                        ← 原底部工具栏 + filmstrip 原样
       `/api/sessions/{sid}/photos/{pid}/image?variant=original`，图注「原照片 · {文件名}」；
     - 右：**参考照片（AI 提供）** `<img data-testid="bird-reference-image">`，`src` = 任务 `referenceUrl`
       （`/reference` 代理）；无参考图/加载失败时占位显示 `result.referenceNote`（未开通联网搜索插件时
-      为开通提示），并显示图注「参考照片（AI 提供）」。
+      为开通提示），并显示图注「参考照片（AI 提供）」；若 `result.referencePageUrl` 是 http(s) 链接，
+      占位处/图注下额外显示可点击链接 `data-testid="bird-reference-link"`
+      （文案「打开 AI 提供的参考链接 ↗」，`target="_blank"` + `rel="noopener noreferrer"`）。
   - 下方：种 `data-testid="bird-result-species"`、科 `data-testid="bird-result-family"`、
     属 `data-testid="bird-result-genus"`、拉丁名、置信度 `data-testid="bird-result-confidence"`、
     识别依据 `note`、备选 species、模型名。

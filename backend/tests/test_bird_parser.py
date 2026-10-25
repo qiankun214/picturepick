@@ -87,6 +87,32 @@ def test_parse_empty_output_raises():
         parse_model_output("   ")
 
 
+def test_parse_captures_reference_page_url():
+    payload = (
+        '{"identified": true, "species": "白鹭", '
+        '"referenceImageUrl": "https://img.example.com/egret.jpg", '
+        '"referenceSource": "中国鸟类图库", '
+        '"referencePageUrl": "https://www.example.com/egret"}'
+    )
+    parsed = parse_model_output(payload)
+    assert parsed.result.referencePageUrl == "https://www.example.com/egret"
+
+
+def test_parse_reference_page_url_falls_back_to_note_or_image_url():
+    with_note = parse_model_output(
+        '{"identified": true, "species": "白鹭", '
+        '"referenceImageUrl": "https://img.example.com/egret.jpg", '
+        '"referenceNote": "https://www.example.com/egret"}'
+    )
+    assert with_note.result.referencePageUrl == "https://www.example.com/egret"
+
+    image_only = parse_model_output(
+        '{"identified": true, "species": "白鹭", '
+        '"referenceImageUrl": "https://img.example.com/egret.jpg"}'
+    )
+    assert image_only.result.referencePageUrl == "https://img.example.com/egret.jpg"
+
+
 def test_parse_truncates_long_text_and_non_numeric_confidence():
     payload = (
         '{"identified": true, "species": "白鹭", "note": "'

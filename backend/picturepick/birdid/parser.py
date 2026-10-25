@@ -109,6 +109,18 @@ def _alternatives(value: Any) -> List[BirdAlternative]:
     return collected
 
 
+def _page_url(payload: Dict[str, Any], reference_url: str) -> str:
+    """AI 提供的参考来源链接：优先 referencePageUrl，其次 referenceNote 里的 http(s)，最后图片直链。"""
+    for key in ("referencePageUrl",):
+        value = _text(payload.get(key), limit=500)
+        if value:
+            return value
+    note = _text(payload.get("referenceNote"), limit=500)
+    if note.lower().startswith(("http://", "https://")):
+        return note
+    return reference_url or ""
+
+
 def parse_model_output(text: str) -> ParsedIdentification:
     """解析模型输出；结构不可用时抛 :class:`BirdParseError`。"""
     payload = extract_json_object(text)
@@ -150,4 +162,5 @@ def parse_model_output(text: str) -> ParsedIdentification:
         referenceNote=_text(payload.get("referenceNote")),
     )
     reference_url = _text(payload.get("referenceImageUrl"), limit=500)
+    result.referencePageUrl = _page_url(payload, reference_url)
     return ParsedIdentification(result=result, reference_image_url=reference_url)

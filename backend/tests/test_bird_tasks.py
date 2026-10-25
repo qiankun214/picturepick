@@ -444,6 +444,52 @@ def test_page_url_is_rejected_and_model_asked_again(client, library, mock_bird):
     # 第二次重试带上第一次重试返回的网页 URL
     assert len(fake_client.requests) >= 2
     assert any("snhm.org.cn" in u for u in fake_client.requests[1])
+    # AI 提供的参考来源页面链接仍保留，供无图片时点击查看
+    assert "snhm.org.cn" in task["result"]["referencePageUrl"]
+    assert wait_bird_idle(client)
+
+
+class _PageOnlyClient:
+    """模型只给网页链接，二次请求也不给图片文件直链。"""
+
+    web_search_error = None
+
+    def __init__(self, config) -> None:
+        self.config = config
+
+    def identify(self, image_bytes, seed="", photo_name=""):
+        from picturepick.birdid.parser import ParsedIdentification
+        from picturepick.models import BirdResult
+
+        return ParsedIdentification(
+            result=BirdResult(
+                identified=True,
+                family="鹭科",
+                species="白鹭",
+                speciesLatin="Egretta garzetta",
+                confidence=0.9,
+                referenceSource="上海自然博物馆",
+                referencePageUrl="https://www.snhm.org.cn/cpjc/info.htm?eid=983",
+            ),
+            reference_image_url="https://www.snhm.org.cn/cpjc/info.htm?eid=983",
+        )
+
+    def request_reference_url(self, result, rejected=None, **kwargs):
+        return None
+
+    def verify(self):
+        return True, "ok", 0
+
+
+def test_page_only_reference_keeps_link_for_user(client, library, mock_bird):
+    sid, photos = session_photos(client, library)
+    service = client.app.state.bird
+    service._client_factory = lambda config: _PageOnlyClient(config)
+    task = submit_and_wait(client, sid, photos[0]["id"])
+    assert task["status"] == "completed"
+    assert task["referenceAvailable"] is False
+    assert "snhm.org.cn" in task["result"]["referencePageUrl"]
+    assert "未获取到参考照片" not in (task.get("referenceUrl") or "")
     assert wait_bird_idle(client)
 
 
