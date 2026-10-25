@@ -1,12 +1,13 @@
 /**
- * PicturePick 浏览器端全流程验收（Playwright + Chromium，第 2 版）
+ * PicturePick 浏览器端全流程验收（Playwright + Chromium，第 3 版）
  *
  * 覆盖：
- *   浏览器原生目录选择（<input webkitdirectory>，Playwright 目录上传）
- *   → 选片（上一张/下一张/缩放/自动放映/pick/统计，图片全部来自 blob URL）
+ *   原生目录对话框只取路径（测试注入 __picturepickTestSourceDir）
+ *   → 后端扫描目录、通过 /image 供图（浏览器不读取/不上传照片）
+ *   → 选片（上一张/下一张/缩放/自动放映/pick/统计）
  *   → 结束本轮 → 进入下一轮 → 再次 pick → 生成结果
- *   → 一键导出最后一轮保留照片到指定文件夹（mock 目录句柄，校验写入文件）
- *   → 下载 JSON 并校验（origin=browser、lastRound 等）
+ *   → 一键导出最后一轮保留照片（测试注入 __picturepickTestExportDir，后端复制文件到该目录，校验磁盘文件）
+ *   → 下载 JSON 并校验（origin=server、lastRound 等）
  *   → 再选一组照片
  *
  * 前置：
@@ -75,16 +76,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const text = (id) => page.textContent(ui(id));
   const shot = (name) => page.screenshot({ path: path.join(OUT, name), fullPage: false });
 
-  console.log('\n[1] 启动页：浏览器原生目录选择');
+  console.log('\n[1] 启动页：原生目录对话框（测试注入路径）');
   await page.goto(BASE + '/', { waitUntil: 'domcontentloaded' });
   await page.waitForSelector(ui('pick-folder-button'), { timeout: 20000 });
   check('启动页出现「选择照片文件夹」按钮', await page.isVisible(ui('pick-folder-button')));
   check('不存在自定义目录浏览弹窗', (await page.locator(ui('folder-browser')).count()) === 0);
   check('不存在路径输入框', (await page.locator(ui('path-input')).count()) === 0);
-  await page.setInputFiles(ui('folder-input'), PHOTOS);
+  check('不存在 webkitdirectory 文件导入框', (await page.locator(ui('folder-input')).count()) === 0);
+  await page.evaluate((dir) => { window.__picturepickTestSourceDir = dir; }, PHOTOS);
+  await page.click(ui('pick-folder-button'));
   await shot('01-start.png');
 
-  console.log('\n[2] 选片视图、统计与本地图片');
+  console.log('\n[2] 选片视图、统计与后端供图');
   await page.waitForSelector(ui('picker-view'), { timeout: 30000 });
   await page.waitForSelector(`${ui('viewer-image')}[data-loaded="true"]`, { timeout: 30000 });
   check('选片视图出现', await page.isVisible(ui('picker-view')));
@@ -94,7 +97,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const viewed1 = parseInt((await text('stats-viewed')).split('/')[0], 10);
   check('浏览计数已上报', viewed1 >= 1, await text('stats-viewed'));
   const viewerSrc = await page.getAttribute(ui('viewer-image'), 'src');
-  check('大图使用浏览器本地 blob URL（不上传）', Boolean(viewerSrc && viewerSrc.startsWith('blob:')), String(viewerSrc).slice(0, 60));
+  check('大图由后端 /image 接口提供（非 blob/本地文件）',
+    Boolean(viewerSrc && viewerSrc.includes('/photos/') && viewerSrc.includes('/image')),
+    String(viewerSrc).slice(0, 120));
+  check('已向 /image 发出图片请求', imageRequests.length >= 1, String(imageRequests.length));
   await shot('02-picker.png');
 
   console.log('\n[3] 上一张/下一张');
@@ -212,7 +218,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const current = await page.evaluate(async () => (await fetch('/api/sessions/current')).json());
   const sid = current.session.id;
   check('当前会话 phase=finished', current.session.phase === 'finished', current.session.phase);
-  check('会话来源为 browser', current.session.origin === 'browser', String(current.session.origin));
+  check('会话来源为 server', current.session.origin === 'server', String(current.session.origin));
+  check('会话根目录为所选绝对路径', current.session.root.toLowerCase() === PHOTOS.toLowerCase(), String(current.session.root));
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 15000 }),
     page.click(ui('result-download')),
@@ -222,7 +229,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('下载文件名为 .json', download.suggestedFilename().endsWith('.json'), download.suggestedFilename());
   const result = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
   check('schemaVersion=1', result.schemaVersion === 1);
-  check('origin=browser', result.origin === 'browser', String(result.origin));
+  check('origin=server', result.origin === 'server', String(result.origin));
   check('totalPhotos=60', result.totalPhotos === 60, String(result.totalPhotos));
   check('roundsPlayed=2', result.roundsPlayed === 2, String(result.roundsPlayed));
   check('photos 含全部 60 张', result.photos.length === 60, String(result.photos.length));
@@ -237,7 +244,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('第三名 pickCount=1 且 pickedInRounds=[1]',
     result.photos[2].pickCount === 1 && JSON.stringify(result.photos[2].pickedInRounds) === '[1]',
     JSON.stringify([result.photos[2].name, result.photos[2].pickCount, result.photos[2].pickedInRounds]));
-  check('browser 结果 absolutePath 为空串', result.photos.every((p) => p.absolutePath === ''));
+  check('server 结果记录绝对路径', result.photos.every((p) => typeof p.absolutePath === 'string' && p.absolutePath.length > 0));
   check('lastRound 存在且 index=2', result.lastRound && result.lastRound.index === 2, JSON.stringify(result.lastRound).slice(0, 200));
   check('lastRound.pickedCount=2 且 id 数与之一致',
     result.lastRound && result.lastRound.pickedCount === 2 && result.lastRound.pickedPhotoIds.length === 2,
@@ -245,35 +252,44 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const apiResult = await page.evaluate(async (id) => (await fetch(`/api/sessions/${id}/result`)).json(), sid);
   check('下载内容与 API 结果一致', JSON.stringify(apiResult) === JSON.stringify(result));
 
-  console.log('\n[10] 一键导出最后一轮保留照片（mock 目录句柄）');
-  const lastNames = result.lastRound.pickedPhotoIds.map((id) => result.photos.find((p) => p.id === id)?.name || id);
-  await page.evaluate(() => {
-    window.__exported = [];
-    window.__picturepickTestExportDirHandle = {
-      name: 'mock-export-folder',
-      getFileHandle: async (name) => ({
-        createWritable: async () => ({
-          write: async (blob) => {
-            window.__exported.push({ name, size: blob && blob.size ? blob.size : 0 });
-          },
-          close: async () => {},
-        }),
-      }),
-    };
-  });
+  console.log('\n[10] 一键导出最后一轮保留照片（后端复制到指定文件夹）');
+  const lastIds = result.lastRound.pickedPhotoIds;
+  const lastNames = lastIds.map((id) => result.photos.find((p) => p.id === id)?.name || id);
+  const exportDir = path.join(OUT, 'exported-photos');
+  fs.rmSync(exportDir, { recursive: true, force: true });
+  fs.mkdirSync(exportDir, { recursive: true });
+  await page.evaluate((dir) => { window.__picturepickTestExportDir = dir; }, exportDir);
   await page.click(ui('export-photos'));
-  await page.waitForFunction(() => window.__exported && window.__exported.length >= 2, null, { timeout: 30000 });
-  await page.waitForTimeout(500);
-  const exported = await page.evaluate(() => window.__exported);
-  check('导出了 2 个文件', exported.length === 2, JSON.stringify(exported));
-  check('导出文件名与保留照片一致', JSON.stringify(exported.map((f) => f.name).sort()) === JSON.stringify([...lastNames].sort()),
-    JSON.stringify({ exported: exported.map((f) => f.name), expected: lastNames }));
-  check('导出文件非空', exported.every((f) => f.size > 0), JSON.stringify(exported));
-  check('导出后无未捕获异常', pageErrors.length === 0, pageErrors.join(' | ') || '');
+  let exportedNames = [];
+  for (let i = 0; i < 60; i++) {
+    exportedNames = fs.existsSync(exportDir) ? fs.readdirSync(exportDir) : [];
+    if (exportedNames.length >= lastNames.length) break;
+    await sleep(300);
+  }
+  check('导出文件数量等于最后一轮保留数', exportedNames.length === lastNames.length,
+    JSON.stringify({ exportedNames, lastNames }));
+  check('导出文件名与最后一轮保留照片一致',
+    JSON.stringify([...exportedNames].sort()) === JSON.stringify([...lastNames].sort()),
+    JSON.stringify({ exportedNames, lastNames }));
+  check('导出文件非空', exportedNames.every((name) => fs.statSync(path.join(exportDir, name)).size > 0));
+  const srcByName = new Map(lastIds.map((id) => {
+    const photo = result.photos.find((p) => p.id === id);
+    return [photo.name, photo.absolutePath];
+  }));
+  check('导出文件内容与原图逐字节一致', exportedNames.every((name) => {
+    const src = srcByName.get(name);
+    if (!src || !fs.existsSync(src)) return false;
+    return fs.readFileSync(path.join(exportDir, name)).equals(fs.readFileSync(src));
+  }));
+  const pageText = await page.textContent('body');
+  check('页面显示导出完成提示', pageText.includes('已导出') || pageText.includes('导出'), pageText.slice(0, 200));
+  check('导出过程无未捕获异常', pageErrors.length === 0, pageErrors.join(' | ') || '');
   await shot('09-export.png');
 
-  console.log('\n[11] 全程未请求后端图片（照片不上传）');
-  check('browser 会话未请求 /image 接口', imageRequests.length === 0, String(imageRequests.slice(0, 3)));
+  console.log('\n[11] 浏览器未读取本地照片（全部由后端提供）');
+  check('全程图片请求均走 /image 接口', imageRequests.length > 0, String(imageRequests.length));
+  check('页面不存在 blob: 图片地址', !(await page.evaluate(
+    () => Array.from(document.images).some((img) => img.src.startsWith('blob:')))));
 
   console.log('\n[12] 再选一组');
   await page.click(ui('restart-button'));

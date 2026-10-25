@@ -1,38 +1,22 @@
 /**
- * 结果页（第 2 版）：
- * - 摘要 / 轮次时间线 / 入选与全部列表 / 搜索 / JSON 下载 / 再选一组（保持 v1 功能）
- * - 新增「导出保留照片」：按 result.lastRound.pickedPhotoIds 导出最后一轮保留的照片
- *   → 优先 File System Access API 写入文件夹（同名自动 -1/-2）
- *   → 不支持时降级逐张下载
- *   → browser 会话若本地 File 映射丢失（刷新后），引导重新选择原文件夹并按 relativePath 匹配
+ * 结果页（第 3 版）：
+ * - 摘要 / 轮次时间线 / 入选与全部切换 / 搜索 / JSON 下载 / 再选一组（保持原功能）
+ * - 「导出保留照片」：目标目录只取绝对路径（桌面原生对话框 → 后端对话框 → 测试注入），
+ *   然后调用 POST /api/sessions/{sid}/export-photos，由**后端复制文件**；
+ *   浏览器不下载/不上传照片本体。
  */
 import * as api from '../api';
-import { errorText, getResult, resultDownloadUrl } from '../api';
+import { errorText, getResult, photoThumbUrl, resultDownloadUrl } from '../api';
 import { isDesktop, safeSaveJson } from '../desktop';
-import {
-  exportPhotosAsDownloads,
-  exportPhotosToDirectory,
-  requestExportDirectoryHandle,
-  type ExportPhotoItem,
-  type ExportProgressInfo,
-} from '../export';
-import type { PhotoLibrary } from '../library';
+import { directoryUnavailableMessage, pickDirectoryPath } from '../directory';
 import { buildResultFileName, formatDateTime } from '../state';
-import type { PickResult, PickedPhoto, ResolveImageUrl, SessionSummary } from '../types';
+import type { PickResult, PickedPhoto, SessionSummary } from '../types';
 import { escapeHtml, icon, qs } from './dom';
 import { showToast } from './toast';
 
 export interface ResultsViewOptions {
   session: SessionSummary | null;
   result: PickResult;
-  /** 浏览器来源会话的本地文件图库（server 会话为空图库）。 */
-  library: PhotoLibrary;
-  /** 统一图片地址解析（browser → object URL，server → /image 接口）。 */
-  resolveImageUrl: ResolveImageUrl;
-  /** App 复用的隐藏目录 input，导出前重新匹配本地文件时使用。 */
-  folderInput: HTMLInputElement;
-  /** 打开浏览器文件夹选择框；取消返回 null。 */
-  pickFolderFiles: () => Promise<File[] | null>;
   onRestart: () => void;
 }
 
@@ -40,8 +24,8 @@ type FilterMode = 'picked' | 'all';
 
 export function mountResultsView(root: HTMLElement, options: ResultsViewOptions): void {
   const { result, session } = options;
-  const origin = session?.origin ?? result.origin ?? 'server';
   const sessionId = session?.id ?? '';
+  const origin = session?.origin ?? result.origin ?? 'server';
   // 契约保证后端已排序，这里再排一次，避免后端实现差异影响展示。
   const photos: PickedPhoto[] = [...result.photos].sort((a, b) => {
     if (b.pickCount !== a.pickCount) return b.pickCount - a.pickCount;
@@ -53,10 +37,9 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
   const photoById = new Map(photos.map((photo) => [photo.id, photo]));
   const lastRound = result.lastRound;
   const lastRoundIds = Array.isArray(lastRound?.pickedPhotoIds) ? lastRound.pickedPhotoIds : [];
-  const exportItems: ExportPhotoItem[] = lastRoundIds
+  const lastRoundPhotos = lastRoundIds
     .map((id) => photoById.get(id))
-    .filter((photo): photo is PickedPhoto => Boolean(photo))
-    .map((photo) => ({ id: photo.id, name: photo.name, relativePath: photo.relativePath }));
+    .filter((photo): photo is PickedPhoto => Boolean(photo));
 
   let filter: FilterMode = 'picked';
   let keyword = '';
@@ -71,11 +54,12 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
           <div class="brand-mark brand-mark--sm">${icon('camera')}</div>
           <span class="topbar__name">PicturePick</span>
           <span class="round-chip">结果</span>
-          ${origin === 'browser' ? `<span class="origin-chip">${icon('folder')}本地</span>` : ''}
         </div>
         <div class="results-top__actions">
           <button type="button" class="btn btn--ghost" data-testid="restart-button">${icon('refresh')}<span>再选一组照片</span></button>
-          <button type="button" class="btn btn--ghost" data-testid="export-photos">${icon('folder')}<span>导出保留照片</span></button>
+          <button type="button" class="btn btn--ghost" data-testid="export-photos" ${
+            lastRoundIds.length && sessionId ? '' : 'disabled'
+          }>${icon('folder')}<span>导出保留照片</span></button>
           <button type="button" class="btn btn--primary" data-testid="result-download">${icon('download')}<span>下载 JSON</span></button>
         </div>
       </header>
@@ -125,7 +109,11 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
                 }
               </span>
             </div>
-            <div class="file-input-slot" data-role="file-input-slot"></div>
+            <span class="export-panel__hint">${
+              origin === 'browser'
+                ? '旧版浏览器导入会话不支持导出，请重新选择本机目录'
+                : '导出由本机服务直接复制文件，不经过浏览器下载'
+            }</span>
           </div>
 
           ${
@@ -168,14 +156,10 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
         </section>
 
         <section class="results-list" data-role="list"></section>
-        <p class="results-footer-note">${icon('info')} JSON 结果包含全部 ${photos.length} 张照片的 pickCount 与入选轮次；「导出保留照片」保存最后一轮的 ${lastRoundIds.length} 张。</p>
+        <p class="results-footer-note">${icon('info')} JSON 结果包含全部 ${photos.length} 张照片的 pickCount 与入选轮次；「导出保留照片」把最后一轮的 ${lastRoundIds.length} 张复制到指定文件夹。</p>
       </main>
     </div>
   `;
-
-  const slot = qs<HTMLElement>(root, '[data-role="file-input-slot"]');
-  options.folderInput.classList.add('visually-hidden-file');
-  slot.appendChild(options.folderInput);
 
   const list = qs<HTMLElement>(root, '[data-role="list"]');
   const searchInput = qs<HTMLInputElement>(root, '[data-role="search"]');
@@ -184,8 +168,6 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
   const exportButton = qs<HTMLButtonElement>(root, '[data-testid="export-photos"]');
   const progressEl = qs<HTMLElement>(root, '[data-testid="export-progress"]');
 
-  if (!exportItems.length) exportButton.disabled = true;
-
   const setProgress = (message: string, active = false): void => {
     progressEl.textContent = message;
     progressEl.classList.toggle('is-active', active);
@@ -193,7 +175,7 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
 
   const setBusy = (busy: boolean): void => {
     exporting = busy;
-    exportButton.disabled = busy || !exportItems.length;
+    exportButton.disabled = busy || !lastRoundIds.length || !sessionId;
     exportButton.classList.toggle('is-busy', busy);
     exportButton.innerHTML = busy
       ? `${icon('refresh')}<span>正在导出…</span>`
@@ -217,19 +199,19 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
       return;
     }
 
-    const rows = filtered
+    list.innerHTML = filtered
       .map((photo) => {
         const isPicked = photo.pickCount > 0;
         const roundChips = photo.pickedInRounds
           .map((round) => `<span class="round-dot" title="第 ${round} 轮保留">R${round}</span>`)
           .join('');
-        const thumbUrl = thumbsEnabled ? options.resolveImageUrl(photo.id, 'thumb') : '';
+        const thumbUrl = thumbsEnabled && sessionId ? photoThumbUrl(sessionId, photo.id) : '';
         return `
           <article class="result-row ${isPicked ? 'is-picked' : ''}">
             ${
               thumbsEnabled
                 ? `<div class="result-thumb ${thumbUrl ? '' : 'is-missing'}">
-                     <img data-thumb="${escapeHtml(thumbUrl)}" data-photo-id="${escapeHtml(photo.id)}" alt="" loading="lazy" />
+                     <img data-thumb="${escapeHtml(thumbUrl)}" alt="" loading="lazy" />
                    </div>`
                 : ''
             }
@@ -245,7 +227,6 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
           </article>`;
       })
       .join('');
-    list.innerHTML = rows;
     for (const img of Array.from(list.querySelectorAll<HTMLImageElement>('img[data-thumb]'))) {
       const src = img.dataset.thumb;
       if (!src) continue;
@@ -256,26 +237,6 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
   };
 
   renderList();
-
-  // browser 会话的缩略图异步生成：就绪后替换列表中的对应图片。
-  const prefetchThumbs = (items: PickedPhoto[]): void => {
-    if (origin !== 'browser') return;
-    void options.library.ensureThumbs(items.slice(0, 200).map((photo) => photo.id));
-  };
-  prefetchThumbs(pickedPhotos);
-  let unsubscribeThumb: (() => void) | null = null;
-  unsubscribeThumb = options.library.onThumbReady((photoId, url) => {
-    if (!list.isConnected) {
-      unsubscribeThumb?.();
-      unsubscribeThumb = null;
-      return;
-    }
-    const img = list.querySelector<HTMLImageElement>(`img[data-photo-id="${photoId}"]`);
-    if (img && img.src !== url) {
-      img.classList.remove('is-broken');
-      img.src = url;
-    }
-  });
 
   qs<HTMLButtonElement>(root, '[data-testid="restart-button"]').addEventListener('click', () => {
     options.onRestart();
@@ -288,7 +249,6 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
         node.classList.toggle('is-active', node === tab);
       }
       renderList();
-      prefetchThumbs(filter === 'all' ? photos : pickedPhotos);
     });
   }
 
@@ -341,89 +301,63 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
     }
   });
 
-  /* ------------------------------ 导出保留照片 ------------------------------ */
+  /* ------------------------------ 导出保留照片（后端复制） ------------------------------ */
 
-  const ensureBrowserFiles = async (items: ExportPhotoItem[]): Promise<boolean> => {
-    let missing = items.filter((item) => !options.library.has(item.id));
-    if (!missing.length) return true;
-    setProgress(`需要重新选择原照片文件夹以读取 ${missing.length} 张本地照片…`, true);
-    showToast('导出前需要重新选择原照片文件夹，照片不会上传', 'warn', 5200);
-    const files = await options.pickFolderFiles();
-    if (!files || files.length === 0) {
-      setProgress('已取消导出');
-      return false;
-    }
-    await options.library.loadFiles(files);
-    options.library.reconcile(result.photos.map((photo) => ({ id: photo.id, relativePath: photo.relativePath })));
-    renderList();
-    missing = items.filter((item) => !options.library.has(item.id));
-    if (missing.length) {
-      setProgress(`仍有 ${missing.length} 张照片未能匹配，请确认选择的是原文件夹`);
-      showToast(`有 ${missing.length} 张照片未匹配到，导出已取消`, 'error', 5200);
-      return false;
-    }
-    setProgress(`已重新读取 ${items.length} 张本地照片，开始导出…`, true);
-    return true;
-  };
-
-  const getBlob = async (photo: ExportPhotoItem): Promise<Blob> => {
-    if (origin === 'browser') {
-      const file = options.library.getFile(photo.id);
-      if (!file) throw new Error(`本地照片已丢失：${photo.name}`);
-      return file;
-    }
-    return api.fetchPhotoBlob(sessionId, photo.id, 'original');
-  };
-
-  const onProgress = (info: ExportProgressInfo): void => {
-    setProgress(`正在导出 ${info.done}/${info.total} · ${info.currentName}`, true);
-  };
-
-  exportButton.addEventListener('click', async () => {
-    if (exporting || !exportItems.length) return;
-    if (!sessionId && origin === 'server') {
+  const handleExport = async (): Promise<void> => {
+    if (exporting) return;
+    if (!sessionId) {
       showToast('无法定位当前会话，请重新选片', 'error');
       return;
     }
+    if (!lastRoundIds.length) {
+      setProgress('最后一轮没有保留照片，无需导出');
+      showToast('最后一轮没有保留照片，无需导出', 'warn', 3600);
+      return;
+    }
+    if (origin === 'browser') {
+      const message = '该结果来自旧版浏览器导入会话，导出不可用；请重新选择本机目录再选片';
+      setProgress(message);
+      showToast(message, 'warn', 5600);
+      return;
+    }
+
     setBusy(true);
     try {
-      if (origin === 'browser') {
-        const ready = await ensureBrowserFiles(exportItems);
-        if (!ready) return;
-      }
-
-      const outcome = await requestExportDirectoryHandle();
+      setProgress('正在选择导出目标文件夹…', true);
+      const outcome = await pickDirectoryPath({ testPath: window.__picturepickTestExportDir });
       if (outcome.status === 'cancelled') {
         setProgress('已取消导出');
+        showToast('已取消导出', 'info', 2200);
         return;
       }
-
-      if (outcome.status === 'picked') {
-        try {
-          const written = await exportPhotosToDirectory(outcome.handle, exportItems, getBlob, onProgress);
-          setProgress(`已导出 ${written.count} 张照片到「${written.folderName}」`);
-          showToast(`已导出 ${written.count} 张照片到「${written.folderName}」`, 'success', 5600);
-          return;
-        } catch (error) {
-          showToast(`写入文件夹失败：${errorText(error)}，已改为逐张下载`, 'warn', 5600);
-        }
-      } else if (outcome.status === 'unsupported') {
-        showToast('当前浏览器不支持直接写入文件夹，已改为逐张下载', 'warn', 5200);
-      } else {
-        showToast(`无法选择文件夹：${errorText(outcome.error)}，已改为逐张下载`, 'warn', 5600);
+      if (outcome.status === 'unavailable') {
+        const message = directoryUnavailableMessage('export');
+        setProgress(message);
+        showToast(message, 'warn', 7000);
+        return;
       }
+      if (outcome.status === 'failed') throw outcome.error;
 
-      // 降级：逐张下载。
-      const downloaded = await exportPhotosAsDownloads(exportItems, getBlob, (info) => {
-        setProgress(`正在下载 ${info.done}/${info.total} · ${info.currentName}`, true);
-      });
-      setProgress(`已开始逐张下载 ${downloaded.count} 张照片，请留意浏览器下载栏`);
-      showToast(`已开始逐张下载 ${downloaded.count} 张照片`, 'info', 5200);
+      const destination = outcome.path;
+      setProgress(`正在复制 ${lastRoundIds.length} 张照片到 ${destination}…`, true);
+      const response = await api.exportPhotos(sessionId, destination);
+      const savedTo = response.destination || destination;
+      const count = response.copied;
+      setProgress(`已导出 ${count} 张到 ${savedTo}`);
+      showToast(`已导出 ${count} 张照片到 ${savedTo}`, 'success', 6000);
+      if (lastRoundPhotos.length && count === 0) {
+        showToast('后端未复制任何照片，请检查目标目录权限', 'warn', 5000);
+      }
     } catch (error) {
-      setProgress(`导出失败：${errorText(error)}`);
-      showToast(`导出失败：${errorText(error)}`, 'error', 5600);
+      const message = errorText(error);
+      setProgress(`导出失败：${message}`);
+      showToast(`导出失败：${message}`, 'error', 6000);
     } finally {
       setBusy(false);
     }
+  };
+
+  exportButton.addEventListener('click', () => {
+    void handleExport();
   });
 }

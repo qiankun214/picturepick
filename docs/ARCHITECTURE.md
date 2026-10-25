@@ -44,26 +44,30 @@ E:\picturePick\
 └── release/                  # 桌面版产物
 ```
 
-## 4. 运行时数据流（第 2 版）
+## 4. 运行时数据流（第 3 版）
 
-### 4.1 浏览器原生目录选择（默认）
+> 核心原则：**浏览器只负责“选目录/选目标文件夹”，拿到绝对路径后交给本机后端；
+> 浏览器绝不读取、遍历或上传照片文件，所有照片由后端扫描并通过 `/image` 按需提供。**
 
-1. 启动页只有一个「选择照片文件夹」按钮 + 隐藏的 `<input type="file" webkitdirectory multiple>`；
-   点击按钮由浏览器弹出系统文件夹选择框（不实现自定义目录浏览，后端不参与选目录）。
-2. 前端筛选 `.jpg/.jpeg`、按相对路径排序，把**照片元数据**（`relativePath/sizeBytes/lastModified`）
-   发给 `POST /api/sessions`（`source="browser"`）；后端不读文件系统，只维护会话与轮次。
-3. 前端把 `File` 存入 `PhotoLibrary`，通过 `URL.createObjectURL` 显示大图/胶片条（照片不上传）；
-   本地生成小缩略图控制内存。
+### 4.1 打开目录与选片（server 来源，默认）
+
+1. 启动页只有一个「选择照片文件夹」按钮；点击后按顺序取绝对目录路径：
+   ① 桌面宿主原生文件夹对话框（WebView2/Electron 桥接）；
+   ② 浏览器模式：`POST /api/dialog/pick-directory`，由本机 Python 后端弹出系统对话框；
+   ③ 自动化测试：`window.__picturepickTestSourceDir` 注入。
+2. 拿到路径后 `POST /api/sessions`（`source="server"`，`directory=路径`）；后端扫描目录、
+   建立会话与轮次，返回照片列表。
+3. 图片统一通过 `GET /api/sessions/{sid}/photos/{pid}/image?variant=original|thumb` 按需加载；
+   浏览器不创建 object URL、不持有 File 对象。
 4. 浏览上报 `viewed`、pick 调 `PUT .../pick`、结束本轮弹窗 → `rounds/next` 或 `finish`。
-5. 结果页：JSON 下载/另存；「导出保留照片」按 `lastRound.pickedPhotoIds` 取 Blob，
-   优先 `showDirectoryPicker({mode:'readwrite'})` 写入用户指定文件夹（同名自动 -1/-2），
-   不支持时降级为逐张浏览器下载。
+5. 结果页：JSON 下载/另存；「导出保留照片」选择目标文件夹路径（获取顺序同上）后调用
+   `POST /api/sessions/{sid}/export-photos`，由**后端把 lastRound 保留照片复制**到目标目录
+   （同名自动 -1/-2，不覆盖）。
 
-### 4.2 server 来源（CLI `--dir` / 桌面端 `--dir`）
+### 4.2 兼容说明
 
-CLI 或桌面端传入目录 → 后端扫描并创建 `origin="server"` 会话 → 前端自动进入 →
-图片走 `/api/sessions/{sid}/photos/{pid}/image`。该模式用于命令行/桌面直启场景，功能一致，
-结果 JSON 记录真实绝对路径。
+- CLI `--dir` / 桌面端 `--dir` 仍是 server 来源预扫描，行为一致。
+- `origin="browser"`（第 2 版的元数据导入）接口保留用于兼容/测试，但当前 UI 不再使用。
 
 ### 4.3 桌面窗口（WebView2）
 
@@ -74,10 +78,12 @@ preload 桥接提供原生「另存为 JSON / 打开路径」→ 窗口关闭后
 
 ## 5. 关键约定
 
-- 接口以 `docs/API.md` 为唯一准绳；第 2 版新增 `origin/sourceLabel/lastRound` 与 browser 会话创建方式。
-- 照片 ID：server 来源 `sha1(绝对路径)[:16]`；browser 来源 `sha1(relativePath)[:16]`。
-- browser 会话的图片接口统一 404，前端不得请求；刷新页面后文件丢失需重新选择目录。
-- 导出使用 File System Access API；自动化测试通过 `window.__picturepickTestExportDirHandle` 注入 mock。
+- 接口以 `docs/API.md` 为唯一准绳；第 3 版新增 `POST /api/sessions/{sid}/export-photos`，
+  前端改为只获取目录路径、由后端扫描与供图。
+- 照片 ID：server 来源 `sha1(绝对路径)[:16]`；browser 来源（兼容接口）`sha1(relativePath)[:16]`。
+- 浏览器端不得读取照片文件（禁止 `webkitdirectory` / File System Access 导入）；图片一律经 `/image`。
+- 导出照片由后端复制；自动化测试通过 `window.__picturepickTestSourceDir` /
+  `window.__picturepickTestExportDir` 注入路径。
 - 构建：`scripts/build.ps1`（前端 → PyInstaller → release）；PowerShell 脚本统一保存为 **UTF-8 with BOM**
   （Windows PowerShell 5.1 兼容）。
 - 受限环境的 npm/二进制缓存约定见 README / 各子目录 README；普通桌面环境无需关心。

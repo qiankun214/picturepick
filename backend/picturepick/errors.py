@@ -1,4 +1,4 @@
-"""领域错误与 API 错误码映射（docs/API.md §1）。
+"""领域错误与 API 错误码映射（docs/API.md 第 3 版 §1）。
 
 所有非 2xx 响应体统一为::
 
@@ -24,7 +24,9 @@ NOT_ENOUGH_PICKS = "NOT_ENOUGH_PICKS"
 PHASE_FINISHED = "PHASE_FINISHED"
 DIALOG_UNAVAILABLE = "DIALOG_UNAVAILABLE"
 WRITE_FAILED = "WRITE_FAILED"
-#: 非契约错误码：仅用于 source 取值非法（客户端 bug），HTTP 422。
+#: 第 3 版新增：导出最后一轮保留照片时，最后一轮没有任何 pick
+NO_PICKED_PHOTOS = "NO_PICKED_PHOTOS"
+#: 第 3 版起进入契约：来源不支持该操作（如 browser 会话调用 export-photos）
 INVALID_SOURCE = "INVALID_SOURCE"
 
 #: docs/API.md §1 定义的错误码 -> 推荐 HTTP 状态码
@@ -40,7 +42,8 @@ STATUS_BY_CODE: Dict[str, int] = {
     PHASE_FINISHED: 409,
     DIALOG_UNAVAILABLE: 501,
     WRITE_FAILED: 400,
-    INVALID_SOURCE: 422,
+    NO_PICKED_PHOTOS: 400,
+    INVALID_SOURCE: 400,
 }
 
 

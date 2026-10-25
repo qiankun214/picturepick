@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -200,6 +201,46 @@ def main() -> int:
         check("非法导出路径 400 WRITE_FAILED",
               expect_error(c.post(f"/api/sessions/{sid}/export", json={"path": "Z:\\no\\such\\dir\\x.json"}), 400, "WRITE_FAILED"))
 
+        print("\n[9b] 一键导出最后一轮保留照片（后端复制）")
+        export_dir = out_dir / "exported-photos"
+        if export_dir.exists():
+            shutil.rmtree(export_dir)
+        export_dir.mkdir(parents=True)
+        absolute_paths = {p["name"]: p["absolutePath"] for p in result["photos"]}
+        last_round_ids = result["lastRound"]["pickedPhotoIds"]
+        last_photos = [p for p in result["photos"] if p["id"] in last_round_ids]
+        exp_photos = c.post(f"/api/sessions/{sid}/export-photos", json={"destination": str(export_dir)})
+        check("export-photos 200", exp_photos.status_code == 200, exp_photos.text[:300])
+        exp_body = exp_photos.json()
+        check("copied 等于最后一轮保留数", exp_body["copied"] == len(last_round_ids) and len(last_round_ids) == 1,
+              f"{exp_body.get('copied')} vs {len(last_round_ids)}")
+        check("files 字段完整", len(exp_body["files"]) == 1 and {"name", "relativePath", "sizeBytes"} <= set(exp_body["files"][0]),
+              json.dumps(exp_body)[:300])
+        copied_name = exp_body["files"][0]["name"]
+        copied_file = export_dir / copied_name
+        check("导出文件已写入目标目录", copied_file.is_file(), str(copied_file))
+        check("导出文件内容与原图一致", copied_file.read_bytes() == Path(last_photos[0]["absolutePath"]).read_bytes())
+        # 同名文件不覆盖：预先放一个同名文件，再次导出应生成 -1 后缀
+        copied_file.write_bytes(b"existing-file-must-not-be-overwritten")
+        exp_again = c.post(f"/api/sessions/{sid}/export-photos", json={"destination": str(export_dir)})
+        check("同名文件自动改名导出", exp_again.status_code == 200 and exp_again.json()["files"][0]["name"] != copied_name,
+              exp_again.text[:300])
+        check("原有同名文件未被覆盖", copied_file.read_bytes() == b"existing-file-must-not-be-overwritten")
+        check("目标目录不存在 400 INVALID_PATH",
+              expect_error(c.post(f"/api/sessions/{sid}/export-photos", json={"destination": str(out_dir / "no-such-dir")}),
+                           400, "INVALID_PATH"))
+        a_file = out_dir / "not-a-dir.txt"
+        a_file.write_text("x", encoding="utf-8")
+        check("目标路径是文件 400 INVALID_PATH",
+              expect_error(c.post(f"/api/sessions/{sid}/export-photos", json={"destination": str(a_file)}),
+                           400, "INVALID_PATH"))
+        # 没有 pick 就结束的会话 → NO_PICKED_PHOTOS
+        no_pick = c.post("/api/sessions", json={"source": "server", "directory": photos_dir, "recursive": True}).json()
+        c.post(f"/api/sessions/{no_pick['id']}/finish")
+        check("最后一轮无保留照片 400 NO_PICKED_PHOTOS",
+              expect_error(c.post(f"/api/sessions/{no_pick['id']}/export-photos", json={"destination": str(export_dir)}),
+                           400, "NO_PICKED_PHOTOS"))
+
         print("\n[10] Web UI 静态资源")
         root = c.get("/")
         check("GET / 200", root.status_code == 200)
@@ -291,6 +332,12 @@ def main() -> int:
         )
         getres = c.get(f"/api/sessions/{bsid}/result")
         check("GET browser result 200 且含 lastRound", getres.status_code == 200 and "lastRound" in getres.json())
+        browser_export = c.post(
+            f"/api/sessions/{bsid}/export-photos",
+            json={"destination": str(export_dir)},
+        )
+        check("browser 会话导出照片 400 INVALID_SOURCE", expect_error(browser_export, 400, "INVALID_SOURCE"),
+              browser_export.text[:200])
 
     print(f"\n===== E2E 结果: PASS={PASS} FAIL={FAIL} =====")
     return 0 if FAIL == 0 else 1

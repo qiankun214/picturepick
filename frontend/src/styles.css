@@ -549,27 +549,22 @@ p {
   text-align: center;
 }
 
-/* 隐藏但保留在 DOM 中：浏览器 / Playwright 都可直接 setInputFiles。 */
-.visually-hidden-file {
-  position: absolute !important;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
-  opacity: 0;
-  pointer-events: none;
+.start-alternative {
+  margin: 0;
+  color: var(--text-mute);
+  font-size: 11.5px;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
-.file-input-slot {
-  display: contents;
-}
-
-.start-screen.is-dragover .start-card {
-  border-color: rgba(255, 191, 71, 0.45);
+.start-alternative code {
+  padding: 1px 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--bg-0);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .start-foot {
@@ -2183,6 +2178,12 @@ body:has(.picker) .toast-stack {
 
 .export-progress.is-active {
   color: var(--accent);
+}
+
+.export-panel__hint {
+  margin-left: auto;
+  color: var(--text-mute);
+  font-size: 11.5px;
 }
 
 .results-top__actions .btn.is-busy .icon {

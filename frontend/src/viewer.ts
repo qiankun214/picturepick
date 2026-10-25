@@ -1,10 +1,9 @@
 /**
  * 大图查看器：缩放（以光标为中心）、拖拽平移、旋转、适应窗口、1:1、双击切换。
- * 只处理视口内的图片几何，不关心业务数据；由选片页通过 setPhoto() 传入
- * photoId + resolveImageUrl（browser 为 object URL，server 为 /image 接口）。
+ * 只处理视口内的图片几何，不关心业务数据；图片 URL 由选片页传入
+ * （统一走后端 `/api/sessions/{sid}/photos/{pid}/image`）。
  */
 import { qs } from './ui/dom';
-import type { ImageVariant, ResolveImageUrl } from './types';
 
 export interface ViewerCallbacks {
   onLoad?: (info: { width: number; height: number }) => void;
@@ -86,11 +85,6 @@ export class ImageViewer {
   }
 
   /* ------------------------------ 对外 API ------------------------------ */
-
-  /** 设置当前照片：由调用方提供「photoId → URL」解析器，组件不感知来源。 */
-  setPhoto(photoId: string, resolve: ResolveImageUrl, variant: ImageVariant = 'original'): void {
-    this.setImage(resolve(photoId, variant));
-  }
 
   setImage(src: string): void {
     this.loadToken += 1;

@@ -241,7 +241,8 @@ def test_unknown_source_is_rejected(client):
         "/api/sessions",
         json={"source": "ftp", "label": DEFAULT_LABEL, "photos": [{"relativePath": "a.jpg"}]},
     )
-    assert response.status_code == 422
+    # 第 3 版起 INVALID_SOURCE 进入契约错误码表（400）
+    assert response.status_code == 400
     assert error_code(response) == "INVALID_SOURCE"
 
 

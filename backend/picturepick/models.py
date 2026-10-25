@@ -164,3 +164,24 @@ class ExportRequest(BaseModel):
 
 class ExportResponse(BaseModel):
     path: str
+
+
+# ---- 导出最后一轮保留照片（第 3 版 §4 export-photos） ----------------------
+
+
+class ExportPhotosRequest(BaseModel):
+    destination: str
+
+
+class ExportPhotosFile(BaseModel):
+    """一条复制成功的照片记录。"""
+
+    name: str
+    relativePath: str
+    sizeBytes: int
+
+
+class ExportPhotosResponse(BaseModel):
+    destination: str
+    copied: int
+    files: List[ExportPhotosFile] = Field(default_factory=list)

@@ -1,9 +1,10 @@
-"""全部 API 路由实现（docs/API.md 第 2 版 §3、§4）。
+"""全部 API 路由实现（docs/API.md 第 3 版 §3、§4）。
 
 会话支持两种来源（``POST /api/sessions``）：
 
-* ``server``：后端扫描本机目录（CLI ``--dir`` / 桌面端 ``--dir``），图片接口可用；
-* ``browser``：浏览器原生目录选择后只上传照片元数据，图片接口统一 404。
+* ``server``：后端扫描本机目录（CLI ``--dir`` / 桌面端 ``--dir``），图片接口可用，
+  且支持 ``POST /api/sessions/{sid}/export-photos`` 由后端复制最后一轮保留照片；
+* ``browser``：只保存照片元数据（第 2 版兼容保留，UI 不再使用），图片接口统一 404。
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ from .models import (
     CreateSessionRequest,
     CurrentSessionResponse,
     DialogResult,
+    ExportPhotosRequest,
+    ExportPhotosResponse,
     ExportRequest,
     ExportResponse,
     FinishResponse,
@@ -120,7 +123,7 @@ def create_session(payload: CreateSessionRequest, request: Request) -> SessionSu
         return session.summary()
 
     if source != ORIGIN_SERVER:
-        raise ApiError(INVALID_SOURCE, f"未知的会话来源: {payload.source}", 422)
+        raise ApiError(INVALID_SOURCE, f"未知的会话来源: {payload.source}")
 
     try:
         result = scanner.scan(payload.directory or "", recursive=payload.recursive)
@@ -278,3 +281,21 @@ def export_result(session_id: str, payload: ExportRequest, request: Request) -> 
     session = _session(request, session_id)
     target = export.write_result_file(payload.path, session.result())
     return ExportResponse(path=target)
+
+
+@router.post(
+    "/sessions/{session_id}/export-photos",
+    response_model=ExportPhotosResponse,
+    summary="导出最后一轮保留照片（后端复制文件）",
+)
+def export_photos(
+    session_id: str,
+    payload: ExportPhotosRequest,
+    request: Request,
+) -> ExportPhotosResponse:
+    """把 ``lastRound.pickedPhotoIds`` 对应的照片复制到目标目录。
+
+    仅 ``origin="server"`` 会话可用；同名文件自动追加 ``-1`` / ``-2`` 后缀，不覆盖。
+    """
+    session = _session(request, session_id)
+    return export.copy_last_round_photos(session, payload.destination)

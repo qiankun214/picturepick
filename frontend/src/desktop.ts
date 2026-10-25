@@ -5,7 +5,7 @@
  * 2) WebView2 外壳（PyInstaller + pywebview，注入 window.pywebview.api；页面以 ?desktop=webview2 打开）
  *
  * 浏览器模式下两者都不存在，所有能力必须优雅降级：
- * - 目录选择 → /api/fs/list 目录浏览或 /api/dialog/pick-directory
+ * - 目录选择 → 本机后端 /api/dialog/pick-directory（仅取绝对路径，后端扫描照片）
  * - 保存结果 → GET /api/sessions/{sid}/result?download=1 浏览器下载
  * - 打开路径 → 无（仅提示保存路径）
  */

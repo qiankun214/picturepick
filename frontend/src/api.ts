@@ -1,15 +1,17 @@
 /**
- * docs/API.md（第 2 版）的唯一前端调用封装。
+ * docs/API.md（第 3 版）的唯一前端调用封装。
  *
  * - 所有请求都走同源 `/api`（开发期由 Vite 代理到 127.0.0.1:8000）。
  * - 非 2xx 统一抛 ApiError（含 code / status / 面向用户的中文 message）。
  * - 图片、下载等「让浏览器直接发起」的地址通过 URL 构造函数暴露；
- *   browser 来源会话的图片由 PhotoLibrary 的 object URL 提供，不走本模块。
+ *   照片本体始终由本机后端提供/复制，浏览器不读取本地文件。
  */
 import type {
   ApiErrorBody,
-  CreateSessionRequest,
+  CreateServerSessionRequest,
   CurrentSessionResponse,
+  DialogPickResponse,
+  ExportPhotosResponse,
   FinishResponse,
   HealthResponse,
   ImageVariant,
@@ -23,17 +25,19 @@ export const API_BASE = '/api';
 
 /** 错误码 → 面向用户的中文文案（docs/API.md §1）。 */
 const ERROR_MESSAGES: Record<string, string> = {
-  INVALID_PATH: '目录不存在、不是目录或没有读取权限',
-  NO_PHOTOS: '没有找到 .jpg / .jpeg 照片',
-  INVALID_PHOTOS: '照片列表格式非法，请重新选择文件夹',
-  TOO_MANY_PHOTOS: '照片数量超过上限（50000 张），请选择更小的文件夹',
+  INVALID_PATH: '目录不存在、不是目录或没有写入权限',
+  NO_PHOTOS: '该目录下没有找到 .jpg / .jpeg 照片',
+  INVALID_PHOTOS: '照片列表格式非法',
+  TOO_MANY_PHOTOS: '照片数量超过上限（50000 张）',
   SESSION_NOT_FOUND: '选片会话不存在或已过期',
   PHOTO_NOT_FOUND: '照片不存在，或文件已被移动/删除',
   ROUND_NOT_FOUND: '轮次不存在',
   NOT_ENOUGH_PICKS: '进入下一轮至少需要保留 2 张照片',
   PHASE_FINISHED: '本轮选片已结束',
-  DIALOG_UNAVAILABLE: '系统目录选择框不可用',
-  WRITE_FAILED: '写入结果文件失败',
+  DIALOG_UNAVAILABLE: '系统文件夹对话框不可用',
+  WRITE_FAILED: '写入/复制文件失败',
+  NO_PICKED_PHOTOS: '最后一轮没有保留照片，无需导出',
+  INVALID_SOURCE: '当前会话来源不支持该操作（仅支持后端扫描的选片会话）',
 };
 
 export function friendlyMessage(code: string, fallback: string): string {
@@ -119,16 +123,17 @@ export function health(signal?: AbortSignal): Promise<HealthResponse> {
   return request<HealthResponse>('/health', { signal });
 }
 
+/** 让本机后端弹出系统原生文件夹对话框，返回绝对路径；不可用时 501。 */
+export function pickDirectoryDialog(signal?: AbortSignal): Promise<DialogPickResponse> {
+  return request<DialogPickResponse>('/dialog/pick-directory', { method: 'POST', signal });
+}
+
 /* ------------------------------------------------------------------ */
 /* 会话接口                                                            */
 /* ------------------------------------------------------------------ */
 
-/**
- * 创建会话：
- * - browser：只提交照片元数据（文件留在浏览器内存）→ origin=browser
- * - server ：后端扫描本机目录（CLI / 桌面端 --dir 场景）
- */
-export function createSession(payload: CreateSessionRequest): Promise<SessionSummary> {
+/** 创建 server 来源会话：后端扫描绝对目录并提供图片。 */
+export function createSession(payload: CreateServerSessionRequest): Promise<SessionSummary> {
   return request<SessionSummary>('/sessions', { method: 'POST', body: payload });
 }
 
@@ -210,11 +215,19 @@ export function getResult(sessionId: string, signal?: AbortSignal): Promise<Pick
   return request<PickResult>(`/sessions/${encodeURIComponent(sessionId)}/result`, { signal });
 }
 
+/** 把最后一轮保留的照片由后端复制到指定目录（docs/API.md §4 export-photos）。 */
+export function exportPhotos(sessionId: string, destination: string): Promise<ExportPhotosResponse> {
+  return request<ExportPhotosResponse>(`/sessions/${encodeURIComponent(sessionId)}/export-photos`, {
+    method: 'POST',
+    body: { destination },
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* 直连浏览器的 URL（图片 / 下载），不经过 fetch                        */
 /* ------------------------------------------------------------------ */
 
-/** server 会话的图片地址。cacheBust 用于「重试加载」时绕过浏览器缓存。 */
+/** 照片图片地址（原图 / 缩略图）。 */
 export function photoImageUrl(
   sessionId: string,
   photoId: string,
@@ -226,27 +239,10 @@ export function photoImageUrl(
   return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/photos/${encodeURIComponent(photoId)}/image?${query.toString()}`;
 }
 
-export function resultDownloadUrl(sessionId: string): string {
-  return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/result?download=1`;
+export function photoThumbUrl(sessionId: string, photoId: string): string {
+  return photoImageUrl(sessionId, photoId, 'thumb');
 }
 
-/** server 会话导出照片时，取回原图 Blob。 */
-export async function fetchPhotoBlob(
-  sessionId: string,
-  photoId: string,
-  variant: ImageVariant = 'original',
-): Promise<Blob> {
-  const response = await fetch(photoImageUrl(sessionId, photoId, variant));
-  if (!response.ok) {
-    let message = '照片读取失败';
-    try {
-      const payload = (await response.json()) as ApiErrorBody;
-      const detail = payload?.detail;
-      if (detail && typeof detail === 'object' && detail.message) message = detail.message;
-    } catch {
-      // 保留默认文案。
-    }
-    throw new ApiError(response.status, 'PHOTO_NOT_FOUND', friendlyMessage('PHOTO_NOT_FOUND', message));
-  }
-  return response.blob();
+export function resultDownloadUrl(sessionId: string): string {
+  return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/result?download=1`;
 }

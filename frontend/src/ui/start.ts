@@ -1,21 +1,17 @@
 /**
- * 启动页（第 2 版）：品牌 + 浏览器原生文件夹选择。
+ * 启动页（第 3 版）：品牌 + 「选择照片文件夹」。
  *
- * 按 docs/API.md §8.1：必须使用浏览器自带文件选择框
- * （隐藏的 <input type="file" webkitdirectory multiple>），不得再实现
- * 自定义目录浏览 / 路径输入 / 后端 fs 接口。
+ * 点击后由主进程按契约 §8.1 获取**绝对目录路径**（桌面原生对话框 →
+ * 本机后端 /api/dialog/pick-directory → 测试注入），再 POST /api/sessions
+ * 由后端扫描目录并供图。浏览器不读取/上传任何照片文件。
  */
 import { errorText } from '../api';
 import { icon, qs } from './dom';
 import { showToast } from './toast';
 
 export interface StartViewOptions {
-  /** 隐藏的目录选择 input（由 App 创建并复用，保证结果页重新选择时是同一个元素）。 */
-  folderInput: HTMLInputElement;
-  /** 打开浏览器文件夹选择框；取消返回 null。 */
-  pickFolderFiles: () => Promise<File[] | null>;
-  /** 用选中的文件创建 browser 会话并进入选片。 */
-  startSession: (files: File[]) => Promise<void>;
+  /** 选择照片目录并创建 server 会话、进入选片；取消/失败由 App 处理提示。 */
+  onPickFolder: () => Promise<void>;
 }
 
 export function mountStartView(root: HTMLElement, options: StartViewOptions): void {
@@ -34,17 +30,19 @@ export function mountStartView(root: HTMLElement, options: StartViewOptions): vo
             <span class="pick-folder-button__icon">${icon('folder')}</span>
             <span class="pick-folder-button__text">
               <strong class="pick-folder-button__title">选择照片文件夹</strong>
-              <small class="pick-folder-button__hint">使用浏览器自带的文件夹选择框</small>
+              <small class="pick-folder-button__hint">弹窗只返回目录路径，照片由本机服务读取</small>
             </span>
             <span class="pick-folder-button__arrow">${icon('arrow-right')}</span>
           </button>
-          <div class="file-input-slot" data-role="file-input-slot"></div>
 
           <p class="privacy-note">
             ${icon('info')}
-            <span>照片只在本地浏览器中读取，<strong>不会上传到服务器</strong>。</span>
+            <span>照片由本机后端直接扫描并通过本地服务按需加载，<strong>浏览器不会读取或上传照片</strong>。</span>
           </p>
           <p class="start-status" data-role="status" hidden></p>
+          <p class="start-alternative">
+            也可以运行 <code>python -m picturepick serve --dir &lt;照片目录&gt;</code> 直接打开选片页。
+          </p>
         </div>
 
         <footer class="start-foot">
@@ -57,12 +55,6 @@ export function mountStartView(root: HTMLElement, options: StartViewOptions): vo
     </div>
   `;
 
-  const slot = qs<HTMLElement>(root, '[data-role="file-input-slot"]');
-  // input 由 App 创建并复用；视图切换时把同一个元素挂到当前页面。
-  options.folderInput.classList.add('visually-hidden-file');
-  options.folderInput.setAttribute('aria-hidden', 'true');
-  slot.appendChild(options.folderInput);
-
   const pickButton = qs<HTMLButtonElement>(root, '[data-testid="pick-folder-button"]');
   const title = qs<HTMLElement>(root, '.pick-folder-button__title');
   const hint = qs<HTMLElement>(root, '.pick-folder-button__hint');
@@ -71,51 +63,26 @@ export function mountStartView(root: HTMLElement, options: StartViewOptions): vo
   const setBusy = (busy: boolean): void => {
     pickButton.disabled = busy;
     pickButton.classList.toggle('is-busy', busy);
-    title.textContent = busy ? '正在读取照片…' : '选择照片文件夹';
-    hint.textContent = busy ? '正在读取所选文件夹中的照片' : '使用浏览器自带的文件夹选择框';
+    title.textContent = busy ? '正在读取照片目录…' : '选择照片文件夹';
+    hint.textContent = busy
+      ? '正在由本机服务扫描目录中的照片'
+      : '弹窗只返回目录路径，照片由本机服务读取';
     status.hidden = !busy;
-    status.textContent = busy ? '正在读取照片并创建选片会话…' : '';
+    status.textContent = busy ? '正在选择目录并扫描照片…' : '';
   };
 
-  const chooseFolder = async (): Promise<void> => {
+  pickButton.addEventListener('click', async () => {
     if (pickButton.disabled) return;
+    setBusy(true);
     try {
-      const files = await options.pickFolderFiles();
-      if (!files || files.length === 0) return; // 用户取消
-      setBusy(true);
-      await options.startSession(files);
+      await options.onPickFolder();
     } catch (error) {
-      setBusy(false);
-      showToast(errorText(error), 'error', 4600);
-      return;
+      showToast(errorText(error), 'error', 5000);
+    } finally {
+      // 成功后视图已被替换；若仍在启动页（取消/失败）则恢复按钮。
+      if (document.body.contains(pickButton)) setBusy(false);
     }
-    // 成功后已跳转到选片页；若仍在（异常情况）恢复按钮。
-    setBusy(false);
-  };
-
-  pickButton.addEventListener('click', () => {
-    void chooseFolder();
   });
 
-  // 键盘可访问性：按钮聚焦时 Enter/Space 由原生 button 处理，无需额外绑定。
-  const input = options.folderInput;
-  input.value = '';
-  title.textContent = '选择照片文件夹';
-  status.hidden = true;
-
-  // 让启动页在进入时给出明确焦点，便于键盘用户。
   pickButton.focus({ preventScroll: true });
-
-  // 便于一些环境通过拖拽文件夹导入（可选增强，不影响主流程）。
-  const screen = qs<HTMLElement>(root, '.start-screen');
-  screen.addEventListener('dragover', (event) => {
-    event.preventDefault();
-    screen.classList.add('is-dragover');
-  });
-  screen.addEventListener('dragleave', () => screen.classList.remove('is-dragover'));
-  screen.addEventListener('drop', (event) => {
-    event.preventDefault();
-    screen.classList.remove('is-dragover');
-    showToast('请点击「选择照片文件夹」，使用浏览器自带的文件夹选择框', 'info', 3200);
-  });
 }

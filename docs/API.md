@@ -28,7 +28,8 @@
 ```
 
 `code` 取值：`INVALID_PATH`、`NO_PHOTOS`、`INVALID_PHOTOS`、`TOO_MANY_PHOTOS`、`SESSION_NOT_FOUND`、
-`PHOTO_NOT_FOUND`、`ROUND_NOT_FOUND`、`NOT_ENOUGH_PICKS`、`PHASE_FINISHED`、`DIALOG_UNAVAILABLE`、`WRITE_FAILED`。
+`PHOTO_NOT_FOUND`、`ROUND_NOT_FOUND`、`NOT_ENOUGH_PICKS`、`PHASE_FINISHED`、`DIALOG_UNAVAILABLE`、
+`WRITE_FAILED`、`NO_PICKED_PHOTOS`、`INVALID_SOURCE`。
 
 ## 2. 数据结构
 
@@ -289,6 +290,36 @@
 响应：`{ "path": "E:\\out\\pick-result.json" }`
 写失败 → 400 `WRITE_FAILED`。
 
+### POST /api/sessions/{sid}/export-photos
+
+把**最后一轮仍然保留**的照片复制到用户指定的文件夹（后端在本机直接复制文件，浏览器不读取/上传照片）。
+仅 `origin="server"` 会话可用。
+
+请求：
+
+```json
+{ "destination": "E:\\导出\\最终保留" }
+```
+
+- `destination` 必须是已存在且可写的目录（通常由系统文件夹对话框选择）。
+- 后端取 `PickResult.lastRound.pickedPhotoIds`，把对应照片复制到 `destination`；
+  同名文件自动追加 `-1`、`-2` 后缀，不覆盖已有文件。
+- 成功 → 200：
+
+```json
+{
+  "destination": "E:\\导出\\最终保留",
+  "copied": 2,
+  "files": [
+    { "name": "IMG_0002.jpg", "relativePath": "2024-春游/IMG_0002.jpg", "sizeBytes": 2845312 },
+    { "name": "IMG_0007.jpg", "relativePath": "2024-春游/IMG_0007.jpg", "sizeBytes": 1845312 }
+  ]
+}
+```
+
+- 错误：`destination` 不存在/无权限 → 400 `INVALID_PATH`；最后一轮没有保留照片 → 400 `NO_PICKED_PHOTOS`；
+  `origin="browser"` → 400 `INVALID_SOURCE`；复制失败 → 400 `WRITE_FAILED`。
+
 ## 5. 静态资源
 
 后端在 `/` 提供前端构建产物（`picturepick/webui`，PyInstaller 下为 `sys._MEIPASS/webui`）：
@@ -323,31 +354,35 @@ python -m picturepick version
 - 打包数据：`picturepick/webui/**` 必须内嵌，运行时通过 `sys._MEIPASS/webui` 定位。
 - 启动参数由桌面端传入：`serve --port <port> --no-browser --no-open ...`（`--no-open` 与 `--no-browser` 均为等价别名，至少支持 `--no-open`）。
 
-## 8. 浏览器端行为约定（第 2 版新增）
+## 8. 浏览器端行为约定（第 3 版修正）
+
+> 第 3 版核心原则：**浏览器只负责“选目录/选目标文件夹”，拿到绝对路径后交给本机后端；
+> 浏览器绝不读取、遍历或上传照片文件，所有照片由后端扫描并通过 `/image` 按需提供。**
+> 这样大目录也不会占满浏览器内存，照片数据也始终只在本机磁盘/本机服务之间流转。
 
 ### 8.1 打开照片目录
 
-- **必须使用浏览器原生文件选择框**：页面中隐藏一个
-  `<input type="file" webkitdirectory multiple accept=".jpg,.jpeg,image/jpeg">`，
-  用户点击「选择照片文件夹」按钮时调用 `input.click()`，由浏览器弹出系统文件夹选择框。
-- 前端不得再实现自定义目录浏览弹窗，也不得调用后端 `/api/fs/*` 或 `/api/dialog/*` 来选择照片目录。
-- 选中后前端遍历 `input.files`，仅保留 `.jpg` / `.jpeg`（大小写不敏感），
-  以 `webkitRelativePath` 作为 `relativePath`，按路径不区分大小写排序，然后调用
-  `POST /api/sessions`（`source="browser"`）创建会话。
-- 照片显示：浏览器端通过 `URL.createObjectURL(file)` 生成图片 URL，不请求后端图片接口；
-  离开/重选目录时必须 `URL.revokeObjectURL` 释放。
+- 页面上一个「选择照片文件夹」按钮（`data-testid="pick-folder-button"`），点击后按以下顺序获取**绝对目录路径**：
+  1. 桌面版（WebView2 / Electron）：通过桌面宿主桥接调用**系统原生文件夹对话框**
+     （`window.picturePickDesktop.pickDirectory()` 或 pywebview `create_file_dialog(FOLDER_DIALOG)`）；
+  2. 浏览器模式：调用 `POST /api/dialog/pick-directory`，由本机 Python 后端弹出系统原生文件夹对话框
+     （tkinter/Windows Shell 对话框；本机应用场景）；
+  3. 自动化测试：若 `window.__picturepickTestSourceDir` 存在，直接使用该路径（不弹框）。
+- 拿到路径后调用 `POST /api/sessions`（`source="server"`，`directory=路径`，`recursive=true`）创建会话；
+  后端扫描目录、返回照片列表，前端通过 `/api/sessions/{sid}/photos/{pid}/image` 按需加载图片。
+- **禁止**使用 `<input type="file" webkitdirectory>` 或 File System Access API 导入照片（那会把所有文件读入浏览器）；
+  也**禁止**实现自定义目录浏览弹窗。
+- 所有对话框都不可用（返回 501 `DIALOG_UNAVAILABLE`）时，提示用户改用
+  `python -m picturepick serve --dir <目录>` 或桌面版，不得回退到自定义目录 UI。
 
 ### 8.2 一键导出「最后一轮保留的照片」
 
 结果页提供按钮（`data-testid="export-photos"`），把 `PickResult.lastRound.pickedPhotoIds`
-对应的照片保存到用户指定的文件夹：
+对应的照片**由后端复制**到用户指定的文件夹：
 
-- 首选浏览器 **File System Access API**：`window.showDirectoryPicker({ mode: "readwrite" })`
-  让用户选择目标文件夹，然后对每张照片 `getFileHandle(name, { create: true })` →
-  `createWritable()` → 写入 Blob → `close()`；同名文件自动追加 `-1`、`-2` 等后缀。
-- 照片 Blob 来源：`origin=browser` 用内存中的 `File`；`origin=server` 用
-  `fetch(/api/sessions/{sid}/photos/{pid}/image)` 取得。
-- 浏览器不支持 `showDirectoryPicker` 时降级：逐张触发浏览器下载（`<a download>`），并提示用户。
-- 导出过程需在 UI 上显示进度；完成后提示保存的文件夹名与文件数。
-- 自动化测试约定：若 `window.__picturepickTestExportDirHandle` 存在，优先使用它作为目标目录句柄
-  （测试注入的 mock，不调用真实选择框）。
+- 目标文件夹路径获取顺序与 8.1 相同：桌面宿主原生对话框 → `POST /api/dialog/pick-directory` →
+  测试注入 `window.__picturepickTestExportDir`。
+- 然后调用 `POST /api/sessions/{sid}/export-photos`（见 §4），后端在本机复制文件、处理同名冲突，
+  返回复制数量与文件列表；前端显示进度（`data-testid="export-progress"`）与完成提示。
+- 浏览器不下载/不上传照片本体；若用户想要浏览器下载方式，可继续使用「下载 JSON」。
+- 自动化测试约定：`window.__picturepickTestExportDir` 为测试注入的目标目录路径，优先于真实对话框。

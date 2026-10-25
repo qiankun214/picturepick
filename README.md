@@ -3,9 +3,10 @@
 一个 **前后端分离** 的本地选片工具：后端 Python（FastAPI）+ 前端 TypeScript/HTML（Vite），
 既可以用「命令行启动 + 浏览器操作」，也可以直接运行打包好的 **Windows 桌面程序**。
 
-核心玩法：用**浏览器自带的文件夹选择框**选一个照片目录 → 逐张浏览、放大/缩小、可自动放映 →
+核心玩法：用**系统原生的文件夹选择框**选一个照片目录（**只取目录路径**，照片始终由本机 Python 后端读取，
+浏览器不读取/不上传任何照片）→ 逐张浏览、放大/缩小、可自动放映 →
 点「保留（pick）」标记心仪照片 → 结束本轮后 **只在已保留的照片里继续下一轮** → 循环几轮直到选出最终结果 →
-下载 JSON（记录每张照片被 pick 的总次数）并**一键把最后一轮保留的照片导出到指定文件夹**。
+下载 JSON（记录每张照片被 pick 的总次数）并**一键把最后一轮保留的照片由后端复制到你指定的文件夹**。
 
 ![选择照片文件夹](docs/screenshots/start.png)
 
@@ -13,14 +14,14 @@
 
 | # | 需求 | 实现 |
 | --- | --- | --- |
-| 1 | 选择目录 | **浏览器自带文件夹选择框**（`<input type="file" webkitdirectory>`），无自定义目录弹窗；照片只在本地浏览器读取，不上传 |
-| 2 | 扫描 jpg | 前端筛选 `.jpg` / `.jpeg`（大小写不敏感），递归保留相对路径，按路径排序 |
+| 1 | 选择目录 | **系统原生文件夹对话框只返回绝对路径**（桌面端由宿主弹出；浏览器模式由本机后端 `/api/dialog/pick-directory` 弹出）；后端扫描目录，**浏览器不读取/不上传照片** |
+| 2 | 扫描 jpg | 后端递归扫描 `.jpg` / `.jpeg`（大小写不敏感），自动排序，跳过非图片文件 |
 | 3 | 选片 + 自动放映 | 上一张 / 下一张按钮；自动放映可设置间隔秒数、播放/暂停；到末尾自动停止 |
 | 4 | 常规显示操作 | 滚轮以光标为中心缩放、拖拽平移、± 缩放、适应窗口、1:1、双击切换、旋转、全屏 |
 | 5 | pick 与统计 | 「保留」按钮可点选/取消；顶栏实时显示 当前序号 / 已浏览 / 本轮保留 / 总数 |
 | 6 | 多轮筛选 | 「结束本轮」弹窗显示保留数量并询问是否进入下一轮（仅从保留照片中继续）；可随时结束 |
 | 7 | 生成 JSON | 结果页下载/另存 JSON：每张照片的 `pickCount` 与 `pickedInRounds`（被 pick 的轮次） |
-| 8 | 一键导出照片 | 结果页「导出保留照片」：把**最后一轮仍保留**的照片保存到用户指定的文件夹（File System Access API；不支持时降级为逐张下载） |
+| 8 | 一键导出照片 | 结果页「导出保留照片」：选择目标文件夹后，**由后端把最后一轮保留的照片复制过去**（同名自动 `-1`/`-2`，不覆盖原文件） |
 
 界面：深色 Lightroom 风格、大图 + 底部胶片条（本地生成缩略图）、键盘快捷键、加载失败重试、
 未结束会话离开提示、错误 toast。所有照片数据只在本机浏览器/进程内处理，后端只监听 `127.0.0.1`。
@@ -50,9 +51,9 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 | `release/PicturePick-WebView2/PicturePick.exe` | 绿色版目录（整个目录一起分发，双击即用，约 33 MB） |
 | `release/PicturePick-WebView2-win-x64.zip` | 上述目录的压缩包（约 17 MB） |
 
-> 若之前构建过 Electron 版，其产物已移到 `release/_legacy-electron/`；
-> `release/win-unpacked/` 是更早的 Electron 绿色版残留（本机 Electron 无法启动，可手动删除），
-> **当前桌面版请使用 `release/PicturePick-WebView2/PicturePick.exe`**。
+> 已知问题：打包后的 WebView2 窗口需要 pythonnet 加载 .NET 运行时，当前发行包在部分机器上会报
+> `Failed to resolve Python.Runtime.Loader.Initialize`（已定位为 .NET Framework/coreclr 选择问题，修复中）。
+> 修复完成前请优先使用下方「方式二：命令行 + 浏览器」，功能完全一致。
 
 **启动后自检 / 验证**：
 
@@ -107,7 +108,8 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
 
 ## 使用流程
 
-1. **选择文件夹**：点击「选择照片文件夹」，在浏览器/系统弹出的原生文件夹选择框里选相册目录。
+1. **选择文件夹**：点击「选择照片文件夹」，在弹出的**系统原生文件夹对话框**中选择相册目录
+   （只返回目录路径，照片由后端读取，浏览器不会读取或上传图片）。
 2. **逐张筛选**：`←/→` 或按钮切换；滚轮缩放、拖拽平移；空格自动放映；`P` 或「保留」按钮标记。
 3. **结束本轮**：点击「结束本轮」，弹窗显示本轮保留数量：
    - 「进入下一轮」：仅在保留的照片中继续筛选（**至少保留 2 张**才可进入下一轮）；
@@ -116,7 +118,7 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
 5. **结果页**：
    - 查看摘要与按 `pickCount` 排序的列表；
    - 「下载 JSON」保存选片记录；
-   - 「导出保留照片」选择目标文件夹，一键保存最后一轮保留的照片（自动处理同名文件）。
+   - 「导出保留照片」选择目标文件夹，由后端把最后一轮保留的照片复制过去（自动处理同名文件）。
 
 ### 快捷键
 
@@ -134,8 +136,8 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
 {
   "schemaVersion": 1,
   "generatedAt": "2026-10-25T14:34:00+08:00",
-  "origin": "browser",
-  "sourceDirectory": "我的照片",
+  "origin": "server",
+  "sourceDirectory": "E:\\照片\\2024",
   "recursive": true,
   "totalPhotos": 120,
   "roundsPlayed": 3,
@@ -150,7 +152,7 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
       "id": "011b8657457565a2",
       "name": "IMG_0005.jpg",
       "relativePath": "2024-春游/IMG_0005.jpg",
-      "absolutePath": "",
+      "absolutePath": "E:\\照片\\2024\\2024-春游\\IMG_0005.jpg",
       "pickCount": 3,
       "pickedInRounds": [1, 2, 3]
     }
@@ -160,24 +162,25 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
 
 - `photos` 包含**全部**照片（未入选的 `pickCount` 为 0），按 `pickCount` 降序、路径升序排序。
 - `pickCount` = 被 pick 的总次数；`pickedInRounds` = 具体轮次；`lastRound` 供「导出保留照片」使用。
-- 浏览器来源（`origin=browser`）不暴露绝对路径，`absolutePath` 为空串；
-  命令行 `--dir` / 桌面端 `--dir` 的 server 来源会记录真实绝对路径。
+- 本机目录扫描（`origin=server`）会记录真实绝对路径；`origin=browser` 仅保留给旧接口兼容，当前 UI 不再使用。
 - 文件为标准 UTF-8 JSON。
 
 ## 技术架构
 
 ```
 浏览器 / 桌面窗口（WebView2）
-   │  照片：本地 File → object URL（不上传）；API：HTTP 只发元数据与操作
+   │  ① 原生文件夹对话框 → 仅把「绝对目录路径」交给后端
+   │  ② 页面请求：会话/轮次/pick/JSON；图片按需 GET /image
    ▼
-FastAPI 后端（Python）── 会话 / 轮次状态机 / pick 计数 / 结果 JSON（server 来源时额外提供图片）
+FastAPI 后端（Python）── 扫描磁盘目录 / 轮次状态机 / pick 计数 / 读取图片 / 复制导出 / 结果 JSON
    │
    └── 静态托管前端构建产物（Vite 打包的 HTML/JS/CSS）
 ```
 
+照片始终由后端从本机磁盘读取：浏览器只拿到图片的 HTTP 响应，不会把整目录读入内存或上传。
 桌面端（`desktop_webview/`）：进程内后台线程启动同一份 FastAPI 应用 → pywebview 创建 WebView2 窗口 →
-加载 `http://127.0.0.1:<port>/?desktop=webview2`；退出时停止后端。原生「另存为 JSON / 打开路径」通过
-pywebview JS API 提供。
+加载 `http://127.0.0.1:<port>/?desktop=webview2`；原生文件夹对话框与「另存为 JSON」通过
+pywebview JS API 提供。导出照片时前端只负责选择目标文件夹，复制由后端完成。
 
 ```
 E:\picturePick\
@@ -186,7 +189,7 @@ E:\picturePick\
 │   ├── tests/                # pytest（117 个用例）
 │   └── pyproject.toml / requirements.txt
 ├── frontend/                 # TypeScript + Vite 前端（原生 DOM，无框架）
-│   └── src/                  # main / api / library(本地图库) / export(一键导出) / viewer / ui/*
+│   └── src/                  # main / api / directory(取目录路径) / viewer / ui/*
 ├── desktop_webview/          # 桌面版：pywebview(WebView2) + PyInstaller（推荐）
 │   ├── picturepick_desktop/  # 桌面主流程与原生桥接（--selftest 自检模式）
 │   └── picturepick-desktop.spec
@@ -240,10 +243,14 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithIn
 
 | 项目 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端单元/接口 | `cd backend; python -m pytest -q` | 117 passed |
-| API 端到端（server + browser 来源） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | PASS=87 / FAIL=0 |
-| 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（详见脚本头部说明） | 由当前环境限制分段验证；功能覆盖见 docs/VERIFICATION.md |
-| 桌面版 | `powershell -File scripts\verify-desktop.ps1` | 运行时自检 + 窗口截图（本机运行） |
+| 后端单元/接口 | `cd backend; python -m pytest -q` | 131 passed |
+| API 端到端（server/browser 双来源 + export-photos） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | PASS=98 / FAIL=0 |
+| 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | PASS=58 / FAIL=0（含后端复制导出逐字节校验） |
+| 桌面版 | `powershell -File scripts\verify-desktop.ps1` | 后端冻结自检通过；GUI 窗口验证进行中（见下） |
+
+> 桌面端已知问题：打包后的 WebView2 窗口需要 pythonnet 加载 .NET 运行时，当前发行包在部分机器上
+> 会报 `Failed to resolve Python.Runtime.Loader.Initialize`，正在修复（改用 .NET WindowsDesktop 运行时）。
+> 在修复完成前，请优先使用「命令行 + 浏览器」方式，功能完全一致。
 
 ## 第三方开源库
 
@@ -256,12 +263,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithIn
 
 ## 常见问题
 
-- **选择文件夹后没有反应**：请用 Chrome/Edge 等 Chromium 内核浏览器打开 `http://127.0.0.1:8000/`；
-  个别浏览器不支持 `webkitdirectory` 时会退化为多选图片文件。
-- **导出保留照片时**：Chromium 会弹出系统「选择目标文件夹」框；若浏览器不支持
-  File System Access API，会降级为逐张下载到浏览器默认下载目录。
-- **页面刷新后无法继续浏览器会话**：照片文件只存在原页面内存中，刷新后请重新选择原文件夹；
-  结果页导出时会提示重新选择原目录以匹配文件。
-- **端口被占用**：`serve` 会打印清晰错误并退出，换 `--port` 即可；桌面端自动选择空闲端口。
-- **JSON 保存在哪里**：浏览器为默认下载目录；桌面端会弹出「另存为」对话框。
-- **照片不会上传**：所有数据都在本机处理，后端只监听 `127.0.0.1`。
+- **选择文件夹后没有反应**：浏览器模式下文件夹对话框由本机后端弹出（浏览器安全限制无法直接把绝对路径交给网页）；
+  若返回 `DIALOG_UNAVAILABLE`，请改用命令行 `python -m picturepick serve --dir <目录>` 或桌面版。
+- **导出保留照片时**：会弹出系统文件夹对话框选择目标目录，随后由后端复制照片（同名自动加 `-1`/`-2`，不覆盖原文件）。
+- **照片不会上传**：浏览器只从后端 `/image` 按需加载要显示的那一张图片；整目录扫描与文件读取都在本机后端完成。

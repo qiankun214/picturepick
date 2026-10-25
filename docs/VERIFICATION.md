@@ -1,4 +1,4 @@
-# PicturePick 验证记录（第 2 版）
+# PicturePick 验证记录（第 3 版）
 
 环境：Windows 11 23H2 (10.0.22621) / Python 3.10.11 / Node v22.20.0 / npm 10.9.3 /
 FastAPI 0.115.14 / uvicorn 0.34.3 / Pillow 9.3.0 / PyInstaller 6.22.3 /
@@ -12,10 +12,11 @@ cd E:\picturePick\backend
 python -m pytest -q
 ```
 
-结果：**117 passed**（原 82 个 v1 用例全部保留 + 新增 35 个 browser 来源会话用例）。
-覆盖：扫描过滤/排序、server 与 browser 双来源会话创建与校验（空/绝对路径/`..`/非 jpg/去重/上限）、
-分页、原图/缩略图、viewed/pick 幂等、多轮状态机、finish 结果 JSON（origin / sourceDirectory /
-absolutePath / lastRound）、下载/导出、browser 图片接口 404、静态/SPA、CORS、错误码、CLI。
+结果：**131 passed**（原 117 个 v2 用例全部保留 + 新增 14 个 export-photos 用例）。
+覆盖：扫描过滤/排序、server 与 browser 双来源会话创建与校验、分页、原图/缩略图、viewed/pick 幂等、
+多轮状态机、finish 结果 JSON（origin / sourceDirectory / absolutePath / lastRound）、下载/导出、
+**export-photos 后端复制**（同名 `-1` 不覆盖、目标目录校验、NO_PICKED_PHOTOS、INVALID_SOURCE、
+复制内容逐字节一致、失败回滚）、静态/SPA、CORS、错误码、CLI。
 
 ## 2. API 端到端（真实 HTTP + 真实 JPEG 样例）
 
@@ -26,27 +27,31 @@ python -m picturepick serve --port 8140 --no-open
 python scripts/e2e_api.py --base-url http://127.0.0.1:8140 --photos-dir samples\photos
 ```
 
-结果：**PASS=87 / FAIL=0**。包含：
+结果：**PASS=98 / FAIL=0**。包含：
 - server 来源完整流程（创建→分页→图片→pick/unpick→三轮→finish→下载/导出）；
-- **browser 来源**（元数据创建 60 张 → 校验 origin/sourceLabel/libraryTotal → `/image` 404 →
-  pick 3 张 → 第 2 轮 → 再 pick 2 张 → finish → `lastRound.index=2/pickedCount=2/pickedPhotoIds` →
-  `absolutePath=""`、`sourceDirectory=label`、pickCount/pickedInRounds 正确）；
-- 非法输入：空列表 / 绝对路径 / `..` 越界 / 非 jpg 扩展名 / 重复 relativePath 去重；
-- `GET /` 返回 `200 text/html`（内嵌 v2 前端）。
+- **export-photos 后端复制**：最后一轮保留照片复制到目标目录、同名自动 `-1` 不覆盖、
+  目标不存在/是文件 → `INVALID_PATH`、无 pick → `NO_PICKED_PHOTOS`、browser 来源 → `INVALID_SOURCE`；
+- **browser 来源兼容接口**（元数据创建→分页→`/image` 404→多轮→finish→lastRound）；
+- 非法输入：空列表 / 绝对路径 / `..` 越界 / 非 jpg / 重复 relativePath 去重；
+- `GET /` 返回 `200 text/html`（内嵌 v3 前端）。
 
-## 3. 浏览器 UI 验收（第 2 版功能）
+## 3. 浏览器 UI 验收（第 3 版：只取目录路径 + 后端供图 + 后端复制导出）
 
-自动化脚本：`scripts/ui_e2e.cjs`（Playwright；`PP_BASE_URL` / `PP_PHOTOS_DIR` / `PP_CHROMIUM` 可覆盖），
-覆盖：原生文件夹导入（`setInputFiles(目录)`）→ blob URL 显示（0 次 `/image` 请求）→ 翻页/缩放/自动放映 →
-pick/取消 → 多轮 → finish → 下载 JSON（origin=browser、lastRound）→ mock 目录句柄一键导出 →
-再选一组；完整脚本已提交，可在普通桌面环境一条命令跑完。
+自动化脚本：`scripts/ui_e2e.cjs`（Playwright；`PP_BASE_URL` / `PP_PHOTOS_DIR` / `PP_CHROMIUM` 可覆盖）。
+测试通过 `window.__picturepickTestSourceDir` / `__picturepickTestExportDir` 注入绝对路径，无需真实对话框。
+Lead 在本机真实 Chromium 中完整跑通：**PASS=58 / FAIL=0**，覆盖：
 
-本机受限沙箱的 Chromium 只能单进程启动且单页存活约 4 秒（超时 fail-fast，无 JS 异常），
-因此实际取证采用「短流程 + 分段」方式完成，结果：
-- 结果页 + 一键导出 + JSON 下载：**31/31 通过**（mock 目录句柄收到 2 个 jpg、大小正确、
-  进度提示「已导出 2 张照片到…」）；
-- 选片/多轮/60 张规模导入/server 来源回归：分段通过；
-- 截图：`docs/screenshots/`（start / picker / end-round-dialog / round2 / results / export-photos）。
+- 启动页只有「选择照片文件夹」，**不存在**自定义目录浏览、路径输入、`webkitdirectory` 文件导入框；
+- 注入目录路径 → 后端扫描 60 张 → 选片视图；大图/胶片条全部走
+  `/api/sessions/{sid}/photos/{id}/image`（断言请求命中后端、页面**不存在 blob: 图片**）；
+- 上一张/下一张、放大/缩小、自动放映、键盘 P pick/取消、统计计数；
+- 结束本轮弹窗 → 进入第 2 轮 → 再 pick → finish → 结果页；
+- 下载 JSON 校验：`origin=server`、60 张全量、pickCount 降序、`pickedInRounds`、
+  `absolutePath` 为绝对路径、`lastRound` 正确、下载内容与 API 一致；
+- **一键导出**：注入目标目录 → 后端复制 → 磁盘出现 2 个 jpg，文件名等于最后一轮保留照片，
+  **内容与原图逐字节一致**，页面显示「已导出 N 张到 …」；
+- 结果 JSON 与页面均未经过浏览器下载照片；导出由本机后端完成。
+- 截图：`docs/screenshots/`（start / picker / picked / end-round-dialog / round2 / results / export-photos）。
 
 ## 4. 命令行验收
 
@@ -91,7 +96,7 @@ release 组装 + zip），PyInstaller 构建成功；PowerShell 5.1 解析/执�
 | `release/PicturePick-WebView2/PicturePick.exe` | 5.5 MB，文件版本 1.0.0（ProductName/FileDescription 已写入） |
 | `release/PicturePick-WebView2/`（整个目录） | **33.2 MB**（已排除 pywebview 无关的 PySide6/Qt/GTK 后端，原 520MB → 33MB） |
 | `release/PicturePick-WebView2-win-x64.zip` | **17.2 MB** |
-| 内置运行时文件 | `pythonnet/runtime/Python.Runtime.dll`、`webview/lib/Microsoft.Web.WebView2.Core.dll`、`webview/lib/runtimes/win-x64/native/WebView2Loader.dll`、`_internal/webui`（v2 前端）均存在 |
+| 内置运行时文件 | `pythonnet/runtime/Python.Runtime.dll`、`webview/lib/Microsoft.Web.WebView2.Core.dll`、`webview/lib/runtimes/win-x64/native/WebView2Loader.dll`、`_internal/webui`（v3 前端）均存在 |
 | 冻结后后端自检 | `PicturePick.exe --selftest-backend`（不开窗口）→ **SELFTEST RESULT: PASS**：内嵌前端存在、`/api/health` ok、`GET /` 由后端提供 755 字符 HTML（证明冻结后的 FastAPI/pydantic/uvicorn/静态服务正常） |
 | 旧 Electron 产物 | 已移到 `release/_legacy-electron/`（本机 Electron 无法启动，避免误用） |
 
@@ -123,6 +128,13 @@ release\PicturePick-WebView2\PicturePick.exe --selftest-backend
 > 说明：早期 Electron 方案在本机遇 Chromium 启动即崩溃（`platform_channel`/`0xc0000005`，
 > Electron 28/31/33/44 复现，与项目代码无关），因此桌面主方案改为 WebView2；
 > Electron 代码仍保留在 `desktop/`，仅作可选历史方案。
+>
+> **当前桌面版已知问题（待修复）**：冻结后的 exe 在加载 pythonnet 时，默认走 .NET Framework(netfx) 路径，
+> 报 `Failed to resolve Python.Runtime.Loader.Initialize`；改用 `PYTHONNET_RUNTIME=coreclr` 后
+> pythonnet 可加载，但 pywebview 需要 `System.Windows.Forms`，必须使用
+> `Microsoft.WindowsDesktop.App` 的 runtimeconfig（本机已确认安装了 .NET 8/9/10 Desktop Runtime）。
+> 修复方案：桌面入口在 `import webview` 前用 `pythonnet.set_runtime("coreclr", runtime_config=...)`
+> 指定 WindowsDesktop 运行时；该修复尚未打包验证（受沙箱 GUI 限制）。**修复前请使用命令行+浏览器方式。**
 
 ## 6. 复核命令集合
 
