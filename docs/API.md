@@ -28,8 +28,9 @@
 ```
 
 `code` 取值：`INVALID_PATH`、`NO_PHOTOS`、`INVALID_PHOTOS`、`TOO_MANY_PHOTOS`、`SESSION_NOT_FOUND`、
-`PHOTO_NOT_FOUND`、`ROUND_NOT_FOUND`、`NOT_ENOUGH_PICKS`、`PHASE_FINISHED`、`DIALOG_UNAVAILABLE`、
-`WRITE_FAILED`、`NO_PICKED_PHOTOS`、`INVALID_SOURCE`。
+`PHOTO_NOT_FOUND`、`ROUND_NOT_FOUND`、`NOT_ENOUGH_PICKS`、`PHASE_FINISHED`、`PHASE_PICKING`、
+`DIALOG_UNAVAILABLE`、`WRITE_FAILED`、`NO_PICKED_PHOTOS`、`INVALID_SOURCE`、`INVALID_RESTORE`、
+`UNSUPPORTED_SCHEMA`。
 
 ## 2. 数据结构
 
@@ -44,6 +45,7 @@
   "recursive": true,
   "createdAt": "2026-10-24T15:00:00+08:00",
   "phase": "picking",
+  "restored": false,
   "roundIndex": 1,
   "roundCount": 1,
   "libraryTotal": 120,
@@ -57,8 +59,8 @@
 ```
 
 说明：`viewedCount` / `pickCount` 是**当前轮**的计数；`rounds[].pickedCount` 是**该轮** pick 数。
-`origin=server` 时 `root`/`sourceLabel` 为绝对目录路径；`origin=browser` 时为浏览器选择的文件夹名
-（例如 `"假期照片"`），仅作展示与结果 JSON 的来源标识。
+`origin=server` 时 `root`/`sourceLabel` 为绝对目录路径；`origin=browser` 时为浏览器选择的文件夹名。
+`restored` 表示该会话是否通过 `POST /api/sessions/restore` 从 JSON 恢复（默认 `false`）。
 
 ### PhotoItem（分页列表项）
 
@@ -206,6 +208,27 @@
 - 目录不存在 / 不可读 → 400 `INVALID_PATH`。
 - 无 jpg/jpeg 文件 → 400 `NO_PHOTOS`。
 
+### POST /api/sessions/restore
+
+从之前保存的 **结果 JSON** 恢复现场（载入 JSON 继续查看/导出/再筛选）。请求体直接是保存的 `PickResult` JSON：
+
+```json
+{ "schemaVersion": 1, "generatedAt": "...", "origin": "server", "sourceDirectory": "E:\\photos", "photos": [ ... ] }
+```
+
+- 校验：`schemaVersion` 必须为 1（否则 400 `UNSUPPORTED_SCHEMA`）；`origin` 必须为 `"server"`
+  （否则 400 `INVALID_SOURCE`，浏览器来源没有可重新扫描的路径）；`sourceDirectory` 必须是存在且可读的目录
+  （否则 400 `INVALID_PATH`）；`photos` 结构非法 → 400 `INVALID_RESTORE`。
+- 后端**重新扫描 `sourceDirectory`**，按 `relativePath` 匹配照片（大小写不敏感）；JSON 中已不存在的照片会被忽略。
+- 重建轮次与计数（无需额外保存轮次明细）：
+  - 第 1 轮 = 当前扫描到的全部照片；
+  - 第 i 轮（i ≥ 2）= JSON 中 `pickedInRounds` 包含 `i-1` 的照片（保持上一轮顺序）；
+  - `pickCount` / `pickedInRounds` 按 JSON 恢复；`viewed` 重置为 0；
+  - 最后一轮保留照片 = JSON `lastRound.pickedPhotoIds`（映射到重新扫描到的照片）。
+- 恢复后的会话 `phase="finished"`、`roundIndex=roundsPlayed`，可直接看结果、下载 JSON、导出照片，
+  也可调用 `POST /api/sessions/{sid}/resume` 继续筛一轮。
+- 成功 → 201 + `SessionSummary`（其中 `restored=true`）。
+
 ### GET /api/sessions/current
 
 返回最近创建且未过期的会话，供命令行 `--dir` 预扫描后前端自动进入。
@@ -266,6 +289,16 @@
 - 当前轮 `pickedCount < 2` → 409 `NOT_ENOUGH_PICKS`（无法再筛选）。
 - `phase == finished` → 409 `PHASE_FINISHED`。
 - 成功 → 200 `SessionSummary`（`roundIndex` 已 +1，新一轮计数从 0 开始；`pickCount` 保留历史累计）。
+
+### POST /api/sessions/{sid}/resume
+
+在**已结束（finished）**的会话上继续筛选：用最后一轮仍然保留的照片创建新的一轮，`phase` 回到 `picking`。
+
+- 仅 `origin="server"`；`origin="browser"` → 400 `INVALID_SOURCE`。
+- `phase == picking` → 409 `PHASE_PICKING`（当前已在选片中）。
+- 最后一轮保留照片 < 2 张 → 409 `NOT_ENOUGH_PICKS`。
+- 成功 → 200 `SessionSummary`（`roundIndex = 原 roundIndex + 1`，新一轮照片 = 原最后一轮保留照片，顺序保持不变；
+  历史 `pickCount` / `pickedInRounds` 保留）。
 
 ### POST /api/sessions/{sid}/finish
 
@@ -386,3 +419,19 @@ python -m picturepick version
   返回复制数量与文件列表；前端显示进度（`data-testid="export-progress"`）与完成提示。
 - 浏览器不下载/不上传照片本体；若用户想要浏览器下载方式，可继续使用「下载 JSON」。
 - 自动化测试约定：`window.__picturepickTestExportDir` 为测试注入的目标目录路径，优先于真实对话框。
+
+### 8.3 载入 JSON 恢复现场
+
+- 启动页在「选择照片文件夹」之外提供「载入 JSON 恢复现场」按钮（`data-testid="restore-button"`）
+  与隐藏的 `<input type="file" data-testid="restore-input" accept=".json,application/json">`。
+- 用户选择之前保存的结果 JSON 后，前端读取文件文本、`JSON.parse`，调用
+  `POST /api/sessions/restore`（请求体即该 JSON）。成功后进入**结果页**（`phase=finished` 的恢复会话）。
+- 前端需校验基本结构（`schemaVersion`、`photos` 等）；错误（JSON 解析失败 / 版本不支持 /
+  `INVALID_SOURCE` / `INVALID_PATH`）用中文 toast 提示。
+- 结果页对恢复的会话显示提示（`data-testid="restore-notice"`），例如
+  「已从 JSON 恢复现场：共 2 轮、最终保留 3 张；来源 E:\photos」。
+- 结果页在「最后一轮保留照片 ≥ 2 张」且 `origin=server` 时显示「继续筛选」按钮
+  （`data-testid="resume-button"`）→ `POST /api/sessions/{sid}/resume` → 进入选片（新一轮 = 原最后一轮保留照片）。
+- 「下载 JSON」「导出保留照片」对恢复的会话照常可用。
+- 自动化测试约定：用 `page.setInputFiles('[data-testid="restore-input"]', <json 文件路径>)` 载入。
+

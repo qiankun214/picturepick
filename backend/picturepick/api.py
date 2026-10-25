@@ -3,18 +3,23 @@
 会话支持两种来源（``POST /api/sessions``）：
 
 * ``server``：后端扫描本机目录（CLI ``--dir`` / 桌面端 ``--dir``），图片接口可用，
-  且支持 ``POST /api/sessions/{sid}/export-photos`` 由后端复制最后一轮保留照片；
+  支持 ``export-photos`` 由后端复制最后一轮保留照片，也支持从结果 JSON 恢复现场；
 * ``browser``：只保存照片元数据（第 2 版兼容保留，UI 不再使用），图片接口统一 404。
+
+第 3 版新增：
+
+* ``POST /api/sessions/restore``：请求体 = 保存的 PickResult JSON，重扫目录恢复现场；
+* ``POST /api/sessions/{sid}/resume``：finished 会话用最后一轮保留照片继续筛选。
 """
 
 from __future__ import annotations
 
 import os
-from typing import List, Literal
+from typing import Any, Dict, List, Literal
 
 from fastapi import APIRouter, Query, Request, Response
 
-from . import __version__, export, fsbrowse, imaging, scanner
+from . import __version__, export, fsbrowse, imaging, restore, scanner
 from .errors import (
     DIALOG_UNAVAILABLE,
     INVALID_PATH,
@@ -141,6 +146,21 @@ def create_session(payload: CreateSessionRequest, request: Request) -> SessionSu
     return session.summary()
 
 
+@router.post(
+    "/sessions/restore",
+    response_model=SessionSummary,
+    status_code=201,
+    summary="从结果 JSON 恢复现场",
+)
+def restore_session(payload: Dict[str, Any], request: Request) -> SessionSummary:
+    """请求体 = 之前保存的 ``PickResult`` JSON；重扫 sourceDirectory 重建会话。
+
+    恢复后 ``phase="finished"``、``restored=true``，可下载 JSON / 导出照片 / 继续筛选。
+    """
+    session = restore.restore_session(payload, _store(request))
+    return session.summary()
+
+
 @router.get("/sessions/current", response_model=CurrentSessionResponse, summary="当前会话")
 def current_session(request: Request) -> CurrentSessionResponse:
     session = _store(request).current()
@@ -243,6 +263,16 @@ def unpick_photo(session_id: str, photo_id: str, request: Request) -> SessionSum
 )
 def next_round(session_id: str, request: Request) -> SessionSummary:
     return _session(request, session_id).next_round()
+
+
+@router.post(
+    "/sessions/{session_id}/resume",
+    response_model=SessionSummary,
+    summary="继续筛选（finished → 新一轮 picking）",
+)
+def resume_session(session_id: str, request: Request) -> SessionSummary:
+    """用最后一轮保留照片创建新一轮；历史 pickCount / pickedInRounds 保留。"""
+    return _session(request, session_id).resume()
 
 
 @router.post(

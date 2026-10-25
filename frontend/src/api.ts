@@ -38,6 +38,9 @@ const ERROR_MESSAGES: Record<string, string> = {
   WRITE_FAILED: '写入/复制文件失败',
   NO_PICKED_PHOTOS: '最后一轮没有保留照片，无需导出',
   INVALID_SOURCE: '当前会话来源不支持该操作（仅支持后端扫描的选片会话）',
+  INVALID_RESTORE: 'JSON 内容不完整或格式不正确，无法恢复现场',
+  UNSUPPORTED_SCHEMA: 'JSON 版本不受支持（需要 schemaVersion=1）',
+  PHASE_PICKING: '当前会话已在选片中，无需继续筛选',
 };
 
 export function friendlyMessage(code: string, fallback: string): string {
@@ -157,6 +160,18 @@ export function getRoundPhotos(
     `/sessions/${encodeURIComponent(sessionId)}/rounds/${roundIndex}/photos?${query.toString()}`,
     { signal },
   );
+}
+
+/** 从之前保存的结果 JSON（PickResult）恢复现场，返回 restored=true 的 finished 会话。 */
+export function restoreSession(result: Record<string, unknown>): Promise<SessionSummary> {
+  return request<SessionSummary>('/sessions/restore', { method: 'POST', body: result });
+}
+
+/** 在已结束（finished）的 server 会话上继续筛选：用最后一轮保留照片开启新一轮。 */
+export function resumeSession(sessionId: string): Promise<SessionSummary> {
+  return request<SessionSummary>(`/sessions/${encodeURIComponent(sessionId)}/resume`, {
+    method: 'POST',
+  });
 }
 
 /** 拉取一整轮的照片（自动翻页，顺序即放映顺序）。 */

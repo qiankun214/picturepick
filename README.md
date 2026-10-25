@@ -22,6 +22,7 @@
 | 6 | 多轮筛选 | 「结束本轮」弹窗显示保留数量并询问是否进入下一轮（仅从保留照片中继续）；可随时结束 |
 | 7 | 生成 JSON | 结果页下载/另存 JSON：每张照片的 `pickCount` 与 `pickedInRounds`（被 pick 的轮次） |
 | 8 | 一键导出照片 | 结果页「导出保留照片」：选择目标文件夹后，**由后端把最后一轮保留的照片复制过去**（同名自动 `-1`/`-2`，不覆盖原文件） |
+| 9 | 载入 JSON 恢复现场 | 启动页「载入 JSON 恢复现场」：选择之前保存的结果 JSON，重新扫描源目录重建轮次与 pick 计数，回到结果页；可再次导出，或「继续筛选」在原保留照片上再来一轮 |
 
 界面：深色 Lightroom 风格、大图 + 底部胶片条（本地生成缩略图）、键盘快捷键、加载失败重试、
 未结束会话离开提示、错误 toast。所有照片数据只在本机浏览器/进程内处理，后端只监听 `127.0.0.1`。
@@ -29,6 +30,7 @@
 ![选片界面](docs/screenshots/picker.png)
 ![结束本轮](docs/screenshots/end-round-dialog.png)
 ![结果页与一键导出](docs/screenshots/export-photos.png)
+![载入 JSON 恢复现场](docs/screenshots/restored-results.png)
 
 ## 三种运行方式
 
@@ -118,7 +120,10 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
 5. **结果页**：
    - 查看摘要与按 `pickCount` 排序的列表；
    - 「下载 JSON」保存选片记录；
-   - 「导出保留照片」选择目标文件夹，由后端把最后一轮保留的照片复制过去（自动处理同名文件）。
+   - 「导出保留照片」选择目标文件夹，由后端把最后一轮保留的照片复制过去（自动处理同名文件）；
+   - 「继续筛选」：在最后一轮保留照片上再筛一轮（保留 ≥2 张时可用）。
+6. **恢复现场**：下次打开应用时，点「载入 JSON 恢复现场」选择之前保存的结果 JSON，
+   会自动重新扫描原目录、恢复轮次与 pick 计数并回到结果页，可继续导出或继续筛选。
 
 ### 快捷键
 
@@ -243,9 +248,9 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithIn
 
 | 项目 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端单元/接口 | `cd backend; python -m pytest -q` | 131 passed |
-| API 端到端（server/browser 双来源 + export-photos） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | PASS=98 / FAIL=0 |
-| 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | PASS=58 / FAIL=0（含后端复制导出逐字节校验） |
+| 后端单元/接口 | `cd backend; python -m pytest -q` | 170 passed |
+| API 端到端（server/browser + export-photos + restore/resume） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | PASS=124 / FAIL=0 |
+| 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | PASS=71 / FAIL=0（含恢复现场与继续筛选、导出逐字节校验） |
 | 桌面版 | `powershell -File scripts\verify-desktop.ps1` | 后端冻结自检通过；GUI 窗口验证进行中（见下） |
 
 > 桌面端已知问题：打包后的 WebView2 窗口需要 pythonnet 加载 .NET 运行时，当前发行包在部分机器上

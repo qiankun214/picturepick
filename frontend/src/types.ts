@@ -26,6 +26,8 @@ export interface SessionSummary {
   recursive: boolean;
   createdAt: string;
   phase: SessionPhase;
+  /** 是否通过 POST /api/sessions/restore 从结果 JSON 恢复（默认 false）。 */
+  restored?: boolean;
   roundIndex: number;
   roundCount: number;
   libraryTotal: number;

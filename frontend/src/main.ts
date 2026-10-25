@@ -9,7 +9,15 @@
  * 浏览器不读取、不遍历、不上传照片文件。
  */
 import './styles.css';
-import { ApiError, createSession, errorText, getCurrentSession, getResult, health } from './api';
+import {
+  ApiError,
+  createSession,
+  errorText,
+  getCurrentSession,
+  getResult,
+  health,
+  restoreSession,
+} from './api';
 import { directoryUnavailableMessage, pickDirectoryPath } from './directory';
 import type { PickResult, SessionSummary } from './types';
 import { PickerView } from './ui/picker';
@@ -118,12 +126,25 @@ class App {
     }
   }
 
+  /** 用结果 JSON 恢复现场：后端重新扫描 sourceDirectory 重建轮次/计数，进入结果页。 */
+  private async restoreFromJson(payload: Record<string, unknown>): Promise<void> {
+    const session = await restoreSession(payload);
+    const result = await getResult(session.id);
+    this.showResults(session, result);
+    showToast(
+      `已从 JSON 恢复现场：共 ${result.roundsPlayed} 轮、最终保留 ${result.pickedPhotoCount} 张`,
+      'success',
+      4200,
+    );
+  }
+
   /* ------------------------------ 视图切换 ------------------------------ */
 
   private showStart(): void {
     this.teardown();
     mountStartView(this.root, {
       onPickFolder: () => this.pickSourceAndStart(),
+      onRestore: (payload) => this.restoreFromJson(payload),
     });
   }
 
@@ -146,6 +167,10 @@ class App {
       result,
       onRestart: () => {
         this.showStart();
+      },
+      onResumed: (resumedSession) => {
+        showToast(`进入第 ${resumedSession.roundIndex} 轮继续筛选`, 'success', 3000);
+        this.showPicker(resumedSession);
       },
     });
   }

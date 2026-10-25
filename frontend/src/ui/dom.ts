@@ -69,6 +69,8 @@ const ICON_PATHS = {
     '<path d="M3.5 8H8V3.5M20.5 8H16V3.5M16 20.5V16h4.5M8 20.5V16H3.5"/>',
   download:
     '<path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 19.5h14"/>',
+  upload:
+    '<path d="M12 16V5"/><path d="m7.5 9.5 4.5-4.5 4.5 4.5"/><path d="M5 15v3.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V15"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   refresh:

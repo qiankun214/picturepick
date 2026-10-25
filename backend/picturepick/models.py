@@ -1,9 +1,7 @@
-"""Pydantic 数据模型：字段与 docs/API.md（第 2 版）§2/§3/§4 的 JSON 契约一一对应。
+"""Pydantic 数据模型：字段与 docs/API.md（第 3 版）§2/§3/§4 的 JSON 契约一一对应。
 
-第 2 版要点：
-* ``SessionSummary`` 增加 ``origin``（server/browser）与 ``sourceLabel``；
-* ``PickResult`` 增加 ``origin`` 与 ``lastRound``（最后一轮仍保留的照片，供一键导出）；
-* ``POST /api/sessions`` 请求体同时支持 browser 来源（照片元数据）与 server 来源（目录扫描）。
+第 2 版加入 ``origin`` / ``sourceLabel`` / ``lastRound``；
+第 3 版新增 ``SessionSummary.restored``（是否从结果 JSON 恢复）与 export-photos 模型。
 
 注意：运行环境安装的是 pydantic 1.10（FastAPI 0.115 同时兼容 v1/v2），
 因此这里只使用 v1/v2 共有的写法（``BaseModel``、``Field``、``.dict()``）。
@@ -72,6 +70,8 @@ class SessionSummary(BaseModel):
     recursive: bool
     createdAt: str
     phase: str
+    #: 是否通过 POST /api/sessions/restore 从结果 JSON 恢复（默认 false）
+    restored: bool = False
     roundIndex: int
     roundCount: int
     libraryTotal: int

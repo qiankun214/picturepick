@@ -1,12 +1,15 @@
-"""会话 / 轮次 / pick 计数状态机（docs/API.md 第 2 版 §4）。
+"""会话 / 轮次 / pick 计数状态机（docs/API.md 第 3 版 §4）。
 
 * 第 1 轮 = 全部照片；之后每一轮 = 上一轮被 pick 的照片（保持上一轮顺序）。
 * ``pickCount`` 不单独存储：它等于「历史各轮中被 pick 的次数」，
   这样取消 pick、进入下一轮都天然保持正确（历史轮次保留自己的 picked 集合）。
-* ``phase`` 只有 ``picking`` / ``finished``；finished 后拒绝任何修改。
+* ``phase`` 只有 ``picking`` / ``finished``；finished 后拒绝修改，但可 ``resume()``
+  用最后一轮保留照片创建新一轮、回到 picking。
 * 会话带有 ``origin``（``server`` / ``browser``）与 ``sourceLabel``：
   server 来源为后端扫描的绝对目录，browser 来源为浏览器选择的文件夹名；
   browser 来源的 ``Photo.absolute_path`` 为空串，图片接口不提供二进制。
+* ``restored`` 表示该会话由 ``POST /api/sessions/restore`` 从结果 JSON 恢复；
+  恢复后 ``phase="finished"``，可查看结果、下载 JSON、导出照片或继续筛选。
 """
 
 from __future__ import annotations
@@ -18,14 +21,16 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from .errors import (
+    INVALID_SOURCE,
     NOT_ENOUGH_PICKS,
     PHASE_FINISHED as PHASE_FINISHED_CODE,
+    PHASE_PICKING as PHASE_PICKING_CODE,
     PHOTO_NOT_FOUND,
     ROUND_NOT_FOUND,
     SESSION_NOT_FOUND,
     ApiError,
 )
-from .export import build_result, isoformat, now_local
+from .export import build_last_round, build_result, isoformat, now_local
 from .models import (
     FinishResponse,
     PhotoItem,
@@ -84,6 +89,7 @@ class Session:
         created_at: Optional[datetime] = None,
         origin: str = ORIGIN_SERVER,
         source_label: Optional[str] = None,
+        restored: bool = False,
     ) -> None:
         self.id = session_id
         self.origin = origin if origin in ORIGINS else ORIGIN_SERVER
@@ -91,6 +97,7 @@ class Session:
         self.source_label = source_label or root
         self.recursive = bool(recursive)
         self.created_at = created_at or now_local()
+        self.restored = bool(restored)
         self.photos: Dict[str, Photo] = {}
         ordered_ids: List[str] = []
         for scanned in photos:
@@ -107,6 +114,32 @@ class Session:
         self.rounds: List[Round] = [Round(1, ordered_ids)]
         self.phase = PHASE_PICKING
         self._finished_result: Optional[PickResult] = None
+
+    @classmethod
+    def from_restore(
+        cls,
+        root: str,
+        recursive: bool,
+        photos: List[ScannedPhoto],
+        rounds: List[Round],
+        created_at: Optional[datetime] = None,
+    ) -> "Session":
+        """由 ``POST /api/sessions/restore`` 重建的、``phase="finished"`` 的会话。"""
+        session = cls(
+            uuid.uuid4().hex,
+            root,
+            recursive,
+            photos,
+            created_at=created_at,
+            origin=ORIGIN_SERVER,
+            source_label=root,
+            restored=True,
+        )
+        session.rounds = list(rounds)
+        session.phase = PHASE_FINISHED
+        # 恢复后的结果按当前（重建的）状态实时生成，不冻结上次的 generatedAt。
+        session._finished_result = None
+        return session
 
     # ---- 基本属性 ----------------------------------------------------------
 
@@ -165,6 +198,7 @@ class Session:
             recursive=self.recursive,
             createdAt=isoformat(self.created_at),
             phase=self.phase,
+            restored=self.restored,
             roundIndex=self.round_index,
             roundCount=len(self.rounds),
             libraryTotal=len(self.photos),
@@ -235,6 +269,30 @@ class Session:
             return self._finished_result
         return build_result(self)
 
+    def resume(self) -> SessionSummary:
+        """在 ``finished`` 会话上用最后一轮保留照片创建新一轮，回到选片中。
+
+        * 仅 ``origin="server"``；
+        * ``phase == picking`` → 409 PHASE_PICKING；
+        * 最后一轮保留照片 < 2 张 → 409 NOT_ENOUGH_PICKS；
+        * 历史 ``pickCount`` / ``pickedInRounds`` 保留（旧轮次不动）。
+        """
+        if self.origin != ORIGIN_SERVER:
+            raise ApiError(INVALID_SOURCE, "仅 server 来源会话支持继续筛选")
+        if self.phase != PHASE_FINISHED:
+            raise ApiError(PHASE_PICKING_CODE, "当前会话仍在选片中，无法继续筛选")
+        last_round = build_last_round(self)
+        if last_round.pickedCount < 2:
+            raise ApiError(
+                NOT_ENOUGH_PICKS,
+                "最后一轮保留照片少于 2 张，无法继续筛选",
+            )
+        self.rounds.append(Round(len(self.rounds) + 1, list(last_round.pickedPhotoIds)))
+        self.phase = PHASE_PICKING
+        # 继续筛选后需要重新 finish 出新结果，清掉之前冻结的旧结果。
+        self._finished_result = None
+        return self.summary()
+
 
 class SessionStore:
     """进程内会话仓库：维护 current session 与过期清理。"""
@@ -263,6 +321,14 @@ class SessionStore:
                 origin=origin,
                 source_label=source_label,
             )
+            self._sessions[session.id] = session
+            self._current_id = session.id
+            return session
+
+    def add(self, session: Session) -> Session:
+        """把外部构造的会话（如 restore 恢复的现场）注册为 current session。"""
+        with self._lock:
+            self._purge_locked()
             self._sessions[session.id] = session
             self._current_id = session.id
             return session

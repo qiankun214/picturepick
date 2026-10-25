@@ -339,6 +339,101 @@ def main() -> int:
         check("browser 会话导出照片 400 INVALID_SOURCE", expect_error(browser_export, 400, "INVALID_SOURCE"),
               browser_export.text[:200])
 
+        print("\n[12] 载入 JSON 恢复现场（restore）与继续筛选（resume）")
+        rsess = c.post("/api/sessions", json={"source": "server", "directory": photos_dir, "recursive": True}).json()
+        rsid = rsess["id"]
+        check("新建会话 restored=false", rsess.get("restored") is False, json.dumps(rsess)[:200])
+        rround1 = c.get(f"/api/sessions/{rsid}/rounds/1/photos", params={"limit": 1000}).json()["photos"]
+        for p in rround1[:3]:
+            c.put(f"/api/sessions/{rsid}/photos/{p['id']}/pick")
+        c.post(f"/api/sessions/{rsid}/rounds/next")
+        rround2 = c.get(f"/api/sessions/{rsid}/rounds/2/photos").json()["photos"]
+        for p in rround2[:2]:
+            c.put(f"/api/sessions/{rsid}/photos/{p['id']}/pick")
+        res2 = c.post(f"/api/sessions/{rsid}/finish").json()["result"]
+        restore_file = out_dir / "restore-result.json"
+        restore_file.write_text(json.dumps(res2, ensure_ascii=False), encoding="utf-8")
+        check("finish 结果 lastRound=2 张", res2["lastRound"]["pickedCount"] == 2, json.dumps(res2["lastRound"])[:200])
+
+        restored_resp = c.post("/api/sessions/restore", json=res2)
+        check("POST /api/sessions/restore 201", restored_resp.status_code == 201, restored_resp.text[:300])
+        restored = restored_resp.json()
+        rid = restored["id"]
+        check("恢复会话 restored=true", restored.get("restored") is True, json.dumps(restored)[:300])
+        check("恢复会话 phase=finished", restored["phase"] == "finished", str(restored.get("phase")))
+        check("恢复会话轮次正确", restored["roundIndex"] == 2 and restored["roundCount"] == 2,
+              json.dumps({k: restored[k] for k in ("roundIndex", "roundCount")}))
+        check("恢复会话库总数=当前扫描数", restored["libraryTotal"] == len(expected),
+              f"{restored['libraryTotal']} vs {len(expected)}")
+        check("恢复会话来源目录正确", restored["sourceLabel"].lower() == photos_dir.lower(),
+              str(restored.get("sourceLabel")))
+
+        restored_result = c.get(f"/api/sessions/{rid}/result").json()
+        check("恢复结果 roundsPlayed=2", restored_result["roundsPlayed"] == 2, str(restored_result["roundsPlayed"]))
+        check("恢复结果 lastRound.pickedPhotoIds 一致",
+              restored_result["lastRound"]["pickedPhotoIds"] == res2["lastRound"]["pickedPhotoIds"],
+              json.dumps(restored_result["lastRound"])[:300])
+        old_counts = {p["id"]: (p["pickCount"], p["pickedInRounds"]) for p in res2["photos"]}
+        new_counts = {p["id"]: (p["pickCount"], p["pickedInRounds"]) for p in restored_result["photos"]}
+        check("恢复结果 pickCount/pickedInRounds 一致",
+              all(old_counts.get(k) == v for k, v in new_counts.items() if k in old_counts),
+              "mismatch")
+        check("恢复结果 absolutePath 为绝对路径",
+              all(p["absolutePath"] and Path(p["absolutePath"]).is_file() for p in restored_result["photos"]))
+
+        restore_export_dir = out_dir / "restore-export"
+        if restore_export_dir.exists():
+            shutil.rmtree(restore_export_dir)
+        restore_export_dir.mkdir(parents=True)
+        rexp = c.post(f"/api/sessions/{rid}/export-photos", json={"destination": str(restore_export_dir)})
+        check("恢复会话可导出照片", rexp.status_code == 200 and rexp.json()["copied"] == 2, rexp.text[:300])
+        check("恢复导出文件存在",
+              all((restore_export_dir / f["name"]).is_file() for f in rexp.json()["files"]))
+
+        resume = c.post(f"/api/sessions/{rid}/resume")
+        check("POST resume 200", resume.status_code == 200, resume.text[:300])
+        resumed = resume.json()
+        rid = resumed["id"]
+        check("resume 后 phase=picking", resumed["phase"] == "picking", str(resumed.get("phase")))
+        check("resume 后轮次 +1", resumed["roundIndex"] == 3 and resumed["roundCount"] == 3,
+              json.dumps({k: resumed[k] for k in ("roundIndex", "roundCount")}))
+        check("resume 后新一轮照片=最后保留照片", resumed["roundPhotoCount"] == 2,
+              str(resumed.get("roundPhotoCount")))
+        round3 = c.get(f"/api/sessions/{rid}/rounds/3/photos").json()["photos"]
+        check("第 3 轮照片 ID 与 lastRound 一致",
+              [p["id"] for p in round3] == res2["lastRound"]["pickedPhotoIds"],
+              json.dumps([p["id"] for p in round3])[:200])
+        for p in round3:
+            c.put(f"/api/sessions/{rid}/photos/{p['id']}/pick")
+        fin3 = c.post(f"/api/sessions/{rid}/finish").json()["result"]
+        counts3 = {p["id"]: p["pickCount"] for p in fin3["photos"]}
+        check("resume 后再筛一轮，历史 pickCount 累加",
+              fin3["roundsPlayed"] == 3
+              and all(counts3[p["id"]] == old_counts[p["id"]][0] + 1 for p in round3),
+              json.dumps({p["id"]: counts3[p["id"]] for p in round3}))
+
+        wrong_schema = json.loads(json.dumps(res2))
+        wrong_schema["schemaVersion"] = 2
+        check("restore schemaVersion!=1 400 UNSUPPORTED_SCHEMA",
+              expect_error(c.post("/api/sessions/restore", json=wrong_schema), 400, "UNSUPPORTED_SCHEMA"))
+        wrong_origin = json.loads(json.dumps(res2))
+        wrong_origin["origin"] = "browser"
+        check("restore browser 来源 400 INVALID_SOURCE",
+              expect_error(c.post("/api/sessions/restore", json=wrong_origin), 400, "INVALID_SOURCE"))
+        wrong_dir = json.loads(json.dumps(res2))
+        wrong_dir["sourceDirectory"] = "Z:\\no\\such\\dir"
+        check("restore 目录不存在 400 INVALID_PATH",
+              expect_error(c.post("/api/sessions/restore", json=wrong_dir), 400, "INVALID_PATH"))
+        bad_photos = json.loads(json.dumps(res2))
+        bad_photos["photos"] = [{"name": "x.jpg"}]
+        check("restore photos 结构非法 400 INVALID_RESTORE",
+              expect_error(c.post("/api/sessions/restore", json=bad_photos), 400, "INVALID_RESTORE"))
+        picking_new = c.post("/api/sessions", json={"source": "server", "directory": photos_dir}).json()
+        check("picking 会话 resume 409 PHASE_PICKING",
+              expect_error(c.post(f"/api/sessions/{picking_new['id']}/resume"), 409, "PHASE_PICKING"))
+        check("最后一轮仅 1 张时 resume 409 NOT_ENOUGH_PICKS",
+              expect_error(c.post(f"/api/sessions/{sid}/resume"), 409, "NOT_ENOUGH_PICKS"))
+
     print(f"\n===== E2E 结果: PASS={PASS} FAIL={FAIL} =====")
     return 0 if FAIL == 0 else 1
 

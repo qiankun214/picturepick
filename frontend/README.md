@@ -54,7 +54,7 @@ frontend/
         └── dom.ts        # 转义、查询、内联 SVG 图标
 ```
 
-## 功能要点（第 3 版）
+## 功能要点（第 4 版）
 
 - **打开照片文件夹**：点击「选择照片文件夹」后，仅通过系统原生文件夹对话框获取
   **绝对目录路径**（桌面宿主 `pickDirectory()` → 本机后端 `POST /api/dialog/pick-directory`
@@ -63,6 +63,16 @@ frontend/
   **浏览器不读取/遍历/上传任何照片文件**，也不使用 `webkitdirectory` / File System Access API；
   自定义目录浏览已删除。对话框不可用（501 `DIALOG_UNAVAILABLE`）时提示改用
   `python -m picturepick serve --dir <目录>` 或桌面版，不回退自定义 UI。
+- **载入 JSON 恢复现场**：启动页「载入 JSON 恢复现场」按钮（`restore-button`）+ 隐藏
+  `<input type="file" data-testid="restore-input" accept=".json,application/json">`。
+  选择之前保存的结果 JSON 后读取并 `JSON.parse`，做基本校验（`schemaVersion=1`、`photos`），
+  再 `POST /api/sessions/restore`（body=该 JSON）；成功后进入 `restored=true` 的结果页，
+  显示恢复提示条（共 N 轮 / 最终保留 M 张 / 来源目录）。解析失败、版本不支持、
+  `INVALID_RESTORE` / `INVALID_PATH` / `NO_PHOTOS` 等均有中文 toast。
+- **继续筛选**：结果页在 `phase=finished`、`origin=server` 且最后一轮保留 ≥ 2 张时显示
+  「继续筛选」（`resume-button`）→ `POST /api/sessions/{sid}/resume` → 进入第 N+1 轮选片
+  （新一轮照片 = 原最后一轮保留照片）；`NOT_ENOUGH_PICKS` / `PHASE_PICKING` / `INVALID_SOURCE`
+  中文提示。
 - **图片加载**：大图、胶片条缩略图、结束弹窗缩略图、结果页缩略图全部走
   `/api/sessions/{sid}/photos/{pid}/image?variant=original|thumb`，由本机后端按需读取磁盘。
 - **启动路由**：`GET /api/health` → `GET /api/sessions/current`；server 会话自动进入选片/结果页。
@@ -105,12 +115,14 @@ frontend/
 
 关键交互元素带稳定的 `data-testid`：
 
-- 启动页：`pick-folder-button`（点击后由原生对话框/测试注入获取路径；无文件 input）
+- 启动页：`pick-folder-button`（点击后由原生对话框/测试注入获取路径；无文件 input）、
+  `restore-button`、`restore-input`（结果 JSON 文件选择）
 - 选片：`viewer-image`（加载完成后 `data-loaded="true"`）、`prev-button`、`next-button`、
   `pick-button`、`autoplay-toggle`、`interval-input`、`end-round-button`、`stats-index`、
   `stats-viewed`、`stats-picked`、`stats-total`、`zoom-in`、`zoom-out`、`zoom-fit`、
   `zoom-actual`、`end-dialog`、`next-round-button`、`finish-button`
-- 结果页：`result-view`、`export-photos`、`export-progress`、`result-download`、`restart-button`
+- 结果页：`result-view`、`export-photos`、`export-progress`、`result-download`、`restart-button`、
+  `restore-notice`（仅 restored 会话）、`resume-button`（可继续筛选时）
 - 通用：`toast`
 
 **自动化测试路径注入**（无需真实系统对话框，`addInitScript` 注入即可）：
@@ -121,6 +133,7 @@ await page.addInitScript(() => {
   window.__picturepickTestExportDir = 'E:\\exports\\final';  // 导出目标目录
 });
 await page.click('[data-testid="pick-folder-button"]');      // 直接使用注入路径
+await page.setInputFiles('[data-testid="restore-input"]', 'result.json'); // 载入 JSON 恢复现场
 ```
 
 > v1 的 `path-input`、`start-button`、`browse-button`、`dialog-button`、`folder-browser`、

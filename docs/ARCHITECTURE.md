@@ -64,12 +64,22 @@ E:\picturePick\
    `POST /api/sessions/{sid}/export-photos`，由**后端把 lastRound 保留照片复制**到目标目录
    （同名自动 -1/-2，不覆盖）。
 
-### 4.2 兼容说明
+### 4.2 恢复现场与继续筛选（第 4 版）
+
+- 结果 JSON 含 `sourceDirectory`、`photos[].relativePath/pickCount/pickedInRounds`、`lastRound`。
+- 前端「载入 JSON 恢复现场」把 JSON 发给 `POST /api/sessions/restore`；后端重新扫描源目录、
+  按相对路径匹配照片并**从 pickedInRounds 重建每一轮**（第 1 轮=全部照片；第 i 轮=含 i-1 的照片），
+  恢复为 `phase=finished` 的会话（`restored=true`），可再次导出 JSON/照片。
+- `POST /api/sessions/{sid}/resume`：在已结束会话上以最后一轮保留照片创建新一轮并回到 picking，
+  用于恢复后继续筛选。
+- 恢复相关的 UI 元素：`restore-button`、`restore-input`、`restore-notice`、`resume-button`。
+
+### 4.3 兼容说明
 
 - CLI `--dir` / 桌面端 `--dir` 仍是 server 来源预扫描，行为一致。
 - `origin="browser"`（第 2 版的元数据导入）接口保留用于兼容/测试，但当前 UI 不再使用。
 
-### 4.3 桌面窗口（WebView2）
+### 4.4 桌面窗口（WebView2）
 
 `PicturePick.exe` → 进程内后台线程启动 FastAPI（随机空闲端口）→ 轮询 `/api/health` →
 pywebview 创建 WebView2 窗口加载 `http://127.0.0.1:<port>/?desktop=webview2` →

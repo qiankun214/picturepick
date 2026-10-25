@@ -297,6 +297,60 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('返回启动页（可选择新文件夹）', await page.isVisible(ui('pick-folder-button')));
   await shot('10-restart.png');
 
+  console.log('\n[13] 载入 JSON 恢复现场');
+  check('启动页存在「载入 JSON 恢复现场」按钮', await page.isVisible(ui('restore-button')));
+  await page.setInputFiles(ui('restore-input'), jsonPath);
+  await page.waitForSelector(ui('result-view'), { timeout: 30000 });
+  await page.waitForTimeout(800);
+  check('恢复后进入结果页', await page.isVisible(ui('result-view')));
+  check('显示恢复提示', await page.isVisible(ui('restore-notice')));
+  const restoredNotice = await page.textContent(ui('restore-notice'));
+  check('恢复提示包含来源与轮次信息', restoredNotice.includes('恢复') && restoredNotice.includes('轮'),
+    restoredNotice.slice(0, 200));
+  const restoredText = await page.textContent(ui('result-view'));
+  check('恢复后的结果与 JSON 一致（60 张/2 轮/保留 2 张）',
+    restoredText.includes('60') && restoredText.includes('2'), restoredText.slice(0, 200));
+  const restoredSession = await page.evaluate(async () => (await fetch('/api/sessions/current')).json());
+  check('恢复会话 restored=true 且 phase=finished',
+    restoredSession.session.restored === true && restoredSession.session.phase === 'finished',
+    JSON.stringify(restoredSession.session).slice(0, 300));
+
+  const restoredExportDir = path.join(OUT, 'restored-export');
+  fs.rmSync(restoredExportDir, { recursive: true, force: true });
+  fs.mkdirSync(restoredExportDir, { recursive: true });
+  await page.evaluate((dir) => { window.__picturepickTestExportDir = dir; }, restoredExportDir);
+  await page.click(ui('export-photos'));
+  let restoredExported = [];
+  for (let i = 0; i < 60; i++) {
+    restoredExported = fs.existsSync(restoredExportDir) ? fs.readdirSync(restoredExportDir) : [];
+    if (restoredExported.length >= lastNames.length) break;
+    await sleep(300);
+  }
+  check('恢复后仍可导出照片', restoredExported.length === lastNames.length,
+    JSON.stringify(restoredExported));
+  check('恢复导出文件内容与原图一致', restoredExported.every((name) => {
+    const src = srcByName.get(name);
+    return Boolean(src && fs.existsSync(src) &&
+      fs.readFileSync(path.join(restoredExportDir, name)).equals(fs.readFileSync(src)));
+  }));
+  await shot('11-restored-results.png');
+
+  console.log('\n[14] 从恢复现场继续筛选');
+  check('结果页显示「继续筛选」按钮', await page.isVisible(ui('resume-button')));
+  await page.click(ui('resume-button'));
+  await page.waitForSelector(ui('picker-view'), { timeout: 20000 });
+  await page.waitForSelector(`${ui('viewer-image')}[data-loaded="true"]`, { timeout: 20000 });
+  check('继续筛选后进入第 3 轮选片', true);
+  check('新一轮总数=最后一轮保留数', (await text('stats-total')).trim() === String(lastNames.length),
+    await text('stats-total'));
+  check('新一轮从 1/2 开始', (await text('stats-index')).trim() === `1/${lastNames.length}`,
+    await text('stats-index'));
+  const resumedSession = await page.evaluate(async () => (await fetch('/api/sessions/current')).json());
+  check('resume 后会话回到 picking',
+    resumedSession.session.phase === 'picking' && resumedSession.session.roundIndex === 3,
+    JSON.stringify({ phase: resumedSession.session.phase, roundIndex: resumedSession.session.roundIndex }));
+  await shot('12-resumed-picker.png');
+
   await browser.close();
   const summary = `\n===== 浏览器全流程 UI 验收: PASS=${pass} FAIL=${fail} =====`;
   console.log(summary);

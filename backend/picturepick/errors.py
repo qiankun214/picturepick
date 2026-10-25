@@ -22,12 +22,17 @@ PHOTO_NOT_FOUND = "PHOTO_NOT_FOUND"
 ROUND_NOT_FOUND = "ROUND_NOT_FOUND"
 NOT_ENOUGH_PICKS = "NOT_ENOUGH_PICKS"
 PHASE_FINISHED = "PHASE_FINISHED"
+PHASE_PICKING = "PHASE_PICKING"
 DIALOG_UNAVAILABLE = "DIALOG_UNAVAILABLE"
 WRITE_FAILED = "WRITE_FAILED"
-#: 第 3 版新增：导出最后一轮保留照片时，最后一轮没有任何 pick
+#: 导出最后一轮保留照片时，最后一轮没有任何 pick
 NO_PICKED_PHOTOS = "NO_PICKED_PHOTOS"
-#: 第 3 版起进入契约：来源不支持该操作（如 browser 会话调用 export-photos）
+#: 来源不支持该操作（如 browser 会话调用 export-photos / resume）
 INVALID_SOURCE = "INVALID_SOURCE"
+#: 载入的结果 JSON 结构非法
+INVALID_RESTORE = "INVALID_RESTORE"
+#: 结果 JSON 的 schemaVersion 不受支持
+UNSUPPORTED_SCHEMA = "UNSUPPORTED_SCHEMA"
 
 #: docs/API.md §1 定义的错误码 -> 推荐 HTTP 状态码
 STATUS_BY_CODE: Dict[str, int] = {
@@ -40,10 +45,13 @@ STATUS_BY_CODE: Dict[str, int] = {
     ROUND_NOT_FOUND: 404,
     NOT_ENOUGH_PICKS: 409,
     PHASE_FINISHED: 409,
+    PHASE_PICKING: 409,
     DIALOG_UNAVAILABLE: 501,
     WRITE_FAILED: 400,
     NO_PICKED_PHOTOS: 400,
     INVALID_SOURCE: 400,
+    INVALID_RESTORE: 400,
+    UNSUPPORTED_SCHEMA: 400,
 }
 
 

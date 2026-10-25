@@ -1,4 +1,4 @@
-# PicturePick 验证记录（第 3 版）
+# PicturePick 验证记录（第 4 版）
 
 环境：Windows 11 23H2 (10.0.22621) / Python 3.10.11 / Node v22.20.0 / npm 10.9.3 /
 FastAPI 0.115.14 / uvicorn 0.34.3 / Pillow 9.3.0 / PyInstaller 6.22.3 /
@@ -12,11 +12,12 @@ cd E:\picturePick\backend
 python -m pytest -q
 ```
 
-结果：**131 passed**（原 117 个 v2 用例全部保留 + 新增 14 个 export-photos 用例）。
+结果：**170 passed**（原 131 个 v3 用例全部保留 + 新增 39 个 restore/resume 用例）。
 覆盖：扫描过滤/排序、server 与 browser 双来源会话创建与校验、分页、原图/缩略图、viewed/pick 幂等、
 多轮状态机、finish 结果 JSON（origin / sourceDirectory / absolutePath / lastRound）、下载/导出、
-**export-photos 后端复制**（同名 `-1` 不覆盖、目标目录校验、NO_PICKED_PHOTOS、INVALID_SOURCE、
-复制内容逐字节一致、失败回滚）、静态/SPA、CORS、错误码、CLI。
+export-photos 后端复制（同名 `-1` 不覆盖、目标目录校验、NO_PICKED_PHOTOS、INVALID_SOURCE、逐字节一致、失败回滚）、
+**restore 恢复现场**（schema/origin/目录/照片结构校验、轮次重建、增删文件容错、lastRound 映射）、
+**resume 继续筛选**（阶段/数量校验、历史计数累加）、静态/SPA、CORS、错误码、CLI。
 
 ## 2. API 端到端（真实 HTTP + 真实 JPEG 样例）
 
@@ -27,19 +28,24 @@ python -m picturepick serve --port 8140 --no-open
 python scripts/e2e_api.py --base-url http://127.0.0.1:8140 --photos-dir samples\photos
 ```
 
-结果：**PASS=98 / FAIL=0**。包含：
+结果：**PASS=124 / FAIL=0**。包含：
 - server 来源完整流程（创建→分页→图片→pick/unpick→三轮→finish→下载/导出）；
 - **export-photos 后端复制**：最后一轮保留照片复制到目标目录、同名自动 `-1` 不覆盖、
   目标不存在/是文件 → `INVALID_PATH`、无 pick → `NO_PICKED_PHOTOS`、browser 来源 → `INVALID_SOURCE`；
+- **restore 恢复现场**：保存结果 JSON → `POST /api/sessions/restore` 201、`restored=true`、
+  phase/roundIndex/libraryTotal/来源目录正确、恢复结果 pickCount/lastRound/absolutePath 与保存 JSON 一致、
+  恢复后可 export-photos；错误码 `UNSUPPORTED_SCHEMA`/`INVALID_SOURCE`/`INVALID_PATH`/`INVALID_RESTORE`；
+- **resume 继续筛选**：恢复会话 → resume 200 → phase=picking、roundIndex+1、新一轮照片=原 lastRound、
+  历史 pickCount 累加；`PHASE_PICKING` / `NOT_ENOUGH_PICKS` 错误分支；
 - **browser 来源兼容接口**（元数据创建→分页→`/image` 404→多轮→finish→lastRound）；
 - 非法输入：空列表 / 绝对路径 / `..` 越界 / 非 jpg / 重复 relativePath 去重；
-- `GET /` 返回 `200 text/html`（内嵌 v3 前端）。
+- `GET /` 返回 `200 text/html`（内嵌 v4 前端）。
 
-## 3. 浏览器 UI 验收（第 3 版：只取目录路径 + 后端供图 + 后端复制导出）
+## 3. 浏览器 UI 验收（第 4 版：只取目录路径 + 后端供图 + 后端复制导出 + 恢复现场）
 
 自动化脚本：`scripts/ui_e2e.cjs`（Playwright；`PP_BASE_URL` / `PP_PHOTOS_DIR` / `PP_CHROMIUM` 可覆盖）。
 测试通过 `window.__picturepickTestSourceDir` / `__picturepickTestExportDir` 注入绝对路径，无需真实对话框。
-Lead 在本机真实 Chromium 中完整跑通：**PASS=58 / FAIL=0**，覆盖：
+Lead 在本机真实 Chromium 中完整跑通：**PASS=71 / FAIL=0**，覆盖：
 
 - 启动页只有「选择照片文件夹」，**不存在**自定义目录浏览、路径输入、`webkitdirectory` 文件导入框；
 - 注入目录路径 → 后端扫描 60 张 → 选片视图；大图/胶片条全部走
@@ -50,8 +56,14 @@ Lead 在本机真实 Chromium 中完整跑通：**PASS=58 / FAIL=0**，覆盖：
   `absolutePath` 为绝对路径、`lastRound` 正确、下载内容与 API 一致；
 - **一键导出**：注入目标目录 → 后端复制 → 磁盘出现 2 个 jpg，文件名等于最后一轮保留照片，
   **内容与原图逐字节一致**，页面显示「已导出 N 张到 …」；
-- 结果 JSON 与页面均未经过浏览器下载照片；导出由本机后端完成。
-- 截图：`docs/screenshots/`（start / picker / picked / end-round-dialog / round2 / results / export-photos）。
+- 结果 JSON 与页面均未经过浏览器下载照片；导出由本机后端完成；
+- **载入 JSON 恢复现场**：回到启动页 → 用 `page.setInputFiles('[data-testid="restore-input"]', jsonPath)`
+  选择刚才下载的结果 JSON → 进入结果页，显示恢复提示「已从 JSON 恢复现场：共 2 轮、最终保留 3 张 · 来源 …」，
+  会话 `restored=true/phase=finished`，与 JSON 数据一致；恢复后可再次导出且内容逐字节一致；
+- **继续筛选**：结果页「继续筛选」→ resume → 进入第 3 轮选片，总数=最后一轮保留数（2），
+  会话回到 `picking`，图片仍由后端 `/image` 提供；
+- 截图：`docs/screenshots/`（start / picker / picked / end-round-dialog / round2 / results /
+  export-photos / restored-results / resumed-picker）。
 
 ## 4. 命令行验收
 
@@ -96,7 +108,7 @@ release 组装 + zip），PyInstaller 构建成功；PowerShell 5.1 解析/执�
 | `release/PicturePick-WebView2/PicturePick.exe` | 5.5 MB，文件版本 1.0.0（ProductName/FileDescription 已写入） |
 | `release/PicturePick-WebView2/`（整个目录） | **33.2 MB**（已排除 pywebview 无关的 PySide6/Qt/GTK 后端，原 520MB → 33MB） |
 | `release/PicturePick-WebView2-win-x64.zip` | **17.2 MB** |
-| 内置运行时文件 | `pythonnet/runtime/Python.Runtime.dll`、`webview/lib/Microsoft.Web.WebView2.Core.dll`、`webview/lib/runtimes/win-x64/native/WebView2Loader.dll`、`_internal/webui`（v3 前端）均存在 |
+| 内置运行时文件 | `pythonnet/runtime/Python.Runtime.dll`、`webview/lib/Microsoft.Web.WebView2.Core.dll`、`webview/lib/runtimes/win-x64/native/WebView2Loader.dll`、`_internal/webui`（v4 前端）均存在 |
 | 冻结后后端自检 | `PicturePick.exe --selftest-backend`（不开窗口）→ **SELFTEST RESULT: PASS**：内嵌前端存在、`/api/health` ok、`GET /` 由后端提供 755 字符 HTML（证明冻结后的 FastAPI/pydantic/uvicorn/静态服务正常） |
 | 旧 Electron 产物 | 已移到 `release/_legacy-electron/`（本机 Electron 无法启动，避免误用） |
 

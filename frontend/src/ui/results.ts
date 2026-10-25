@@ -18,6 +18,8 @@ export interface ResultsViewOptions {
   session: SessionSummary | null;
   result: PickResult;
   onRestart: () => void;
+  /** 「继续筛选」成功后进入新一轮选片。 */
+  onResumed: (session: SessionSummary) => void;
 }
 
 type FilterMode = 'picked' | 'all';
@@ -41,11 +43,20 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
     .map((id) => photoById.get(id))
     .filter((photo): photo is PickedPhoto => Boolean(photo));
 
+  const restored = Boolean(session?.restored);
+  // 已结束的 server 会话、最后一轮保留 >= 2 张时可继续筛选（契约 §4 resume / §8.3）。
+  const canResume =
+    Boolean(sessionId) &&
+    origin === 'server' &&
+    session?.phase === 'finished' &&
+    lastRoundIds.length >= 2;
+
   let filter: FilterMode = 'picked';
   let keyword = '';
   let thumbsEnabled = true;
   let searchTimer = 0;
   let exporting = false;
+  let resuming = false;
 
   root.innerHTML = `
     <div class="results" data-testid="result-view">
@@ -56,6 +67,11 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
           <span class="round-chip">结果</span>
         </div>
         <div class="results-top__actions">
+          ${
+            canResume
+              ? `<button type="button" class="btn btn--ghost resume-button" data-testid="resume-button">${icon('play')}<span>继续筛选</span></button>`
+              : ''
+          }
           <button type="button" class="btn btn--ghost" data-testid="restart-button">${icon('refresh')}<span>再选一组照片</span></button>
           <button type="button" class="btn btn--ghost" data-testid="export-photos" ${
             lastRoundIds.length && sessionId ? '' : 'disabled'
@@ -75,6 +91,15 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
             <span class="dot">·</span>
             <span>${result.roundsPlayed} 轮筛选</span>
           </p>
+
+          ${
+            restored
+              ? `<div class="restore-notice" data-testid="restore-notice">
+                   ${icon('upload')}
+                   <span>已从 JSON 恢复现场：共 <strong>${result.roundsPlayed}</strong> 轮、最终保留 <strong>${result.pickedPhotoCount}</strong> 张 · 来源 <strong>${escapeHtml(result.sourceDirectory)}</strong></span>
+                 </div>`
+              : ''
+          }
 
           <div class="summary-grid">
             <div class="summary-card">
@@ -241,6 +266,31 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
   qs<HTMLButtonElement>(root, '[data-testid="restart-button"]').addEventListener('click', () => {
     options.onRestart();
   });
+
+  /* ------------------------------ 继续筛选（resume） ------------------------------ */
+
+  const resumeButton = root.querySelector<HTMLButtonElement>('[data-testid="resume-button"]');
+  if (resumeButton) {
+    resumeButton.addEventListener('click', async () => {
+      if (resuming || !sessionId) return;
+      resuming = true;
+      const originalHtml = resumeButton.innerHTML;
+      resumeButton.disabled = true;
+      resumeButton.innerHTML = `${icon('refresh')}<span>正在继续…</span>`;
+      try {
+        const resumed = await api.resumeSession(sessionId);
+        options.onResumed(resumed);
+      } catch (error) {
+        showToast(`无法继续筛选：${errorText(error)}`, 'error', 5600);
+      } finally {
+        resuming = false;
+        if (resumeButton.isConnected) {
+          resumeButton.disabled = false;
+          resumeButton.innerHTML = originalHtml;
+        }
+      }
+    });
+  }
 
   for (const tab of Array.from(root.querySelectorAll<HTMLButtonElement>('[data-filter]'))) {
     tab.addEventListener('click', () => {
