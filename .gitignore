@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+npm-debug.log*
+.pnpm-store/
+
+# Build artifacts
+build/
+dist/
+backend/picturepick/webui/
+frontend/dist/
+desktop/out/
+desktop/dist/
+desktop/.userdata/
+.userdata/
+release/
+
+# Local caches / scratch / generated samples
+.cache/
+.tmp/
+.scratch/
+samples/
+.picturepick-runs/
+*.log
+
+# OS
+Thumbs.db
+.DS_Store

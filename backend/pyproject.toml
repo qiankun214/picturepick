@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "picturepick"
+description = "PicturePick 本地选片服务（FastAPI + uvicorn + Pillow）"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=1.10",
+    "Pillow>=9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "httpx>=0.24",
+]
+
+[project.scripts]
+picturepick = "picturepick.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "picturepick.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["picturepick*"]
+
+[tool.setuptools.package-data]
+picturepick = ["webui/*", "webui/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

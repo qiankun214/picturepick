@@ -1,0 +1,19 @@
+{
+  "name": "picturepick-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "description": "PicturePick — 逐轮选片 Web UI（TypeScript + Vite，原生 DOM）",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/vite-wasm.mjs dev",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && node scripts/vite-wasm.mjs build",
+    "preview": "node scripts/vite-wasm.mjs preview"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "npm:esbuild-wasm@^0.21.5",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}

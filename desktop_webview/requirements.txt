@@ -1,0 +1,4 @@
+# PicturePick 桌面端（PyInstaller + WebView2）依赖
+# 后端依赖同 backend/requirements.txt（打包时使用当前 Python 环境）
+pywebview>=6.2
+pythonnet>=3.1

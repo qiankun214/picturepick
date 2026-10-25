@@ -1,0 +1,57 @@
+appId: com.picturepick.app
+productName: PicturePick
+copyright: Copyright © 2026 PicturePick
+
+directories:
+  output: ../release
+  buildResources: resources
+
+# 应用代码：编译后的 Electron 主进程/预加载脚本 + package.json（无运行时 npm 依赖）
+files:
+  - dist/**
+  - package.json
+  - "!**/*.map"
+
+# 后端 Python sidecar（PyInstaller onedir 产物）放到 resources/backend，
+# 主进程用 process.resourcesPath/backend/picturepick-backend.exe 定位。
+extraResources:
+  - from: ../build/backend
+    to: backend
+    filter:
+      - "**/*"
+
+asar: true
+# 本应用无运行时 node 依赖（tsc 编译产物进 dist/），beforeBuild 返回 false：
+# electron-builder 跳过 npm install/rebuild 与生产 node_modules 收集（沙箱内该步骤会 spawn EPERM）。
+beforeBuild: scripts/before-build.js
+buildDependenciesFromSource: false
+publish: null
+
+# GitHub 不可达，Electron 二进制走国内镜像；同时可用 ELECTRON_MIRROR 环境变量覆盖。
+# cache：@electron/get 的默认缓存目录是 %LOCALAPPDATA%\electron\Cache（本沙箱不可写），
+# 显式指向工作区缓存目录；其余 electron-builder 工具缓存由 ELECTRON_BUILDER_CACHE 控制。
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
+  cache: E:\picturePick\.cache\electron-builder\electron
+
+win:
+  icon: resources/icon.ico
+  target:
+    - target: portable
+      arch:
+        - x64
+    - target: nsis
+      arch:
+        - x64
+
+portable:
+  artifactName: PicturePick-${version}-win-x64-portable.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  artifactName: PicturePick-${version}-win-x64-setup.${ext}

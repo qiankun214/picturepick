@@ -1,0 +1,14 @@
+# PicturePick 后端依赖
+#
+# 运行环境已全局安装（Windows / Python 3.10），正常情况下无需 pip install。
+# 与 pyproject.toml [project].dependencies 保持一致。
+
+# ---- 运行时依赖 ----
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=1.10
+Pillow>=9.0
+
+# ---- 测试依赖 ----
+pytest>=7.0
+httpx>=0.24

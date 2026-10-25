@@ -1,0 +1,28 @@
+{
+  "name": "picturepick-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PicturePick 桌面端：Electron 外壳 + PyInstaller sidecar 后端",
+  "main": "dist/main.js",
+  "author": "PicturePick",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "start:only": "electron .",
+    "icons": "python scripts/make_icon.py",
+    "pack:backend": "python -m PyInstaller --noconfirm --clean --distpath ../build --workpath ../build/.pyinstaller-work pyinstaller/picturepick-backend.spec",
+    "dist": "npm run build && electron-builder",
+    "dist:dir": "npm run build && electron-builder --dir",
+    "dist:sandbox": "npm run build && node scripts/eb-sandbox.cjs --config electron-builder.yml",
+    "dist:dir:sandbox": "npm run build && node scripts/eb-sandbox.cjs --dir --config electron-builder.yml",
+    "pack:portable": "node scripts/pack-portable.mjs",
+    "verify:backend": "node scripts/verify-backend.mjs --require-webui"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "electron": "^33.4.11",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.7.2"
+  }
+}
