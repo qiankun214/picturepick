@@ -300,6 +300,8 @@ class PickResult(BaseModel):
     totalPhotos: int
     roundsPlayed: int
     pickedPhotoCount: int
+    #: 保存时会话状态：finished（结束生成）或 picking（选片页中途保存，可导入后继续选片）
+    phase: str = "finished"
     #: 已采纳 AI 识鸟的照片数（第 5 版）
     birdIdentifiedCount: int = 0
     lastRound: LastRound

@@ -163,7 +163,7 @@
 摘要刷新响应里（照片列表接口本身返回 `PhotoItem[]`；pick/viewed 返回 `SessionSummary`，
 `birdIdentifiedCount` 随之刷新）。
 
-### PickResult（最终 JSON）
+### PickResult（结果 / 状态 JSON）
 
 ```json
 {
@@ -175,6 +175,7 @@
   "totalPhotos": 120,
   "roundsPlayed": 3,
   "pickedPhotoCount": 12,
+  "phase": "picking",
   "birdIdentifiedCount": 2,
   "lastRound": {
     "index": 3,
@@ -207,6 +208,10 @@
 **v5 新增**：`birdIdentifiedCount`（int）与 `photos[].bird`（`BirdObservation | null`）。
 采纳后立即写回会话，`GET /api/sessions/{sid}/result`、`POST .../finish`、JSON 下载/另存为都会包含；
 `schemaVersion` 仍为 `1`（只新增可选字段）。**旧 JSON（无这些字段）继续可恢复**。
+**v5.3 新增 `phase`**：`picking` 表示该 JSON 是**选片页「保存 JSON」**中途保存的状态
+（`GET .../result` / `?download=1` 在选片过程中即可获取，包含当前轮 pick 与已采纳鸟种）；
+`finished` 表示结束生成的结果（旧 JSON 无该字段时按 `finished` 处理）。导入时据此决定
+回到选片页还是结果页（见 `POST /api/sessions/restore`）。
 
 ### BirdAlternative（v5 新增）
 
@@ -493,8 +498,12 @@ interface BirdAdoptResponse {
 - **v5**：若 JSON 的 `photos[].bird` 存在，恢复后立即生效为 `PhotoItem.bird`，并计入
   `SessionSummary.birdIdentifiedCount`；结构不合法的 `bird` 会被忽略（不导致恢复失败）。
   老 JSON（无 `bird`）行为不变。
-- 恢复后的会话 `phase="finished"`、`roundIndex=roundsPlayed`，可直接看结果、下载 JSON、导出照片，
-  也可调用 `POST /api/sessions/{sid}/resume` 继续筛一轮。
+- 恢复后的会话状态由 JSON 的 `phase` 决定（v5.3）：
+  - `phase="picking"`（选片页保存的状态 JSON）→ 恢复为 `phase="picking"`，`roundIndex=roundsPlayed`，
+    当前轮 pick 全部还原，可直接继续选片/提交 AI 识鸟；`viewed` 仍重置为 0；
+  - `phase="finished"` 或缺失（旧 JSON）→ `phase="finished"`，可直接看结果、下载 JSON、导出照片，
+    也可调用 `POST /api/sessions/{sid}/resume` 继续筛一轮。
+  `phase` 非法值 → 400 `INVALID_RESTORE`。
 - 成功 → 201 + `SessionSummary`（其中 `restored=true`）。
 
 ### GET /api/sessions/current
@@ -761,12 +770,18 @@ JSON 字段：
 - 浏览器不下载/不上传照片本体；若用户想要浏览器下载方式，可继续使用「下载 JSON」。
 - 自动化测试约定：`window.__picturepickTestExportDir` 为测试注入的目标目录路径，优先于真实对话框。
 
-### 8.3 载入 JSON 恢复现场
+### 8.3 载入 JSON 恢复现场 / 选片页保存状态
 
+- **选片页保存状态（v5.3）**：选片页顶部「保存 JSON」按钮（`data-testid="picker-save-json"`）
+  调用 `GET /api/sessions/{sid}/result?download=1` 下载当前状态 JSON（`phase="picking"`，包含当前轮
+  pick、`sourceDirectory`、已采纳鸟种）；桌面端走原生「另存为」`safeSaveJson`，浏览器端用下载链接。
+  该 JSON 不包含照片本体（照片仍由后端从原目录读取）。
 - 启动页在「选择照片文件夹」之外提供「载入 JSON 恢复现场」按钮（`data-testid="restore-button"`）
   与隐藏的 `<input type="file" data-testid="restore-input" accept=".json,application/json">`。
-- 用户选择之前保存的结果 JSON 后，前端读取文件文本、`JSON.parse`，调用
-  `POST /api/sessions/restore`（请求体即该 JSON）。成功后进入**结果页**（`phase=finished` 的恢复会话）。
+- 用户选择之前保存的 JSON 后，前端读取文件文本、`JSON.parse`，调用
+  `POST /api/sessions/restore`（请求体即该 JSON）。成功后按会话 `phase` 分流：
+  - `phase="picking"` → **直接进入选片页**（同一轮，pick 全部保留，可继续选片/AI 识鸟）；
+  - `phase="finished"` 或旧 JSON（无 phase）→ 进入**结果页**。
 - 前端需校验基本结构（`schemaVersion`、`photos` 等）；错误（JSON 解析失败 / 版本不支持 /
   `INVALID_SOURCE` / `INVALID_PATH`）用中文 toast 提示。
 - 结果页对恢复的会话显示提示（`data-testid="restore-notice"`），例如

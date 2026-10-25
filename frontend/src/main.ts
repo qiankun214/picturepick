@@ -126,9 +126,22 @@ class App {
     }
   }
 
-  /** 用结果 JSON 恢复现场：后端重新扫描 sourceDirectory 重建轮次/计数，进入结果页。 */
+  /**
+   * 用结果/状态 JSON 恢复现场：后端重新扫描 sourceDirectory 重建轮次/计数。
+   * - ``phase="picking"``（选片页「保存 JSON」中途保存）→ 直接回到选片页继续；
+   * - ``phase="finished"``（结束生成或旧 JSON）→ 结果页。
+   */
   private async restoreFromJson(payload: Record<string, unknown>): Promise<void> {
     const session = await restoreSession(payload);
+    if (session.phase === 'picking') {
+      this.showPicker(session);
+      showToast(
+        `已恢复选片状态：第 ${session.roundIndex} 轮，本轮保留 ${session.pickCount} 张，可继续选片`,
+        'success',
+        4600,
+      );
+      return;
+    }
     const result = await getResult(session.id);
     this.showResults(session, result);
     showToast(

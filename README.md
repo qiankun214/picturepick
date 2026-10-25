@@ -110,7 +110,7 @@ python -m picturepick scan --dir "D:\我的照片"              # 预览会扫�
 python -m picturepick scan --dir "D:\我的照片" --no-recursive
 ```
 
-依赖：Python 3.10+，`pip install -r backend/requirements.txt`（FastAPI / uvicorn / Pillow / pydantic）。
+依赖：Python 3.12（3.10 已于 2026-10-01 EOL，升级见 [`docs/PYTHON-UPGRADE.md`](docs/PYTHON-UPGRADE.md)），`pip install -r backend/requirements.txt`（FastAPI / uvicorn / Pillow / pydantic）。
 AI 识鸟使用 Python 标准库调用火山方舟 HTTP API，**无需额外安装依赖**。
 
 ### 方式三：开发模式（前后端分离调试）
@@ -138,13 +138,19 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
    - 「进入下一轮」：仅在保留的照片中继续筛选（**至少保留 2 张**才可进入下一轮）；
    - 「结束并生成结果」：随时可结束，生成最终 JSON。
 4. **重复第 2–3 步**，每轮范围都会缩小。
-5. **结果页**：
+5. **随时保存状态**：选片页顶部「保存 JSON」按钮可下载当前状态（含 `sourceDirectory`、轮次、
+   每张照片的 pick 次数/轮次、已采纳的鸟种；JSON 内 `phase="picking"`）。之后在启动页
+   「载入 JSON 恢复现场」选择该文件，会**直接回到选片页**（同一轮、pick 保留），可接着选；
+   不需要重新选目录，也不会上传/复制照片。
+6. **结果页**：
    - 查看摘要与按 `pickCount` 排序的列表；
    - 「下载 JSON」保存选片记录；
    - 「导出保留照片」选择目标文件夹，由后端把最后一轮保留的照片复制过去（自动处理同名文件）；
    - 「继续筛选」：在最后一轮保留照片上再筛一轮（保留 ≥2 张时可用）。
-6. **恢复现场**：下次打开应用时，点「载入 JSON 恢复现场」选择之前保存的结果 JSON，
-   会自动重新扫描原目录、恢复轮次与 pick 计数并回到结果页，可继续导出或继续筛选。
+7. **恢复现场**：下次打开应用时，点「载入 JSON 恢复现场」选择之前保存的 JSON，
+   会自动重新扫描原目录、恢复轮次与 pick 计数：
+   - 选片页保存的状态 JSON（`phase="picking"`）→ 直接回到选片页继续；
+   - 结束生成的结果 JSON（`phase="finished"`）→ 回到结果页，可继续导出或继续筛选。
 
 ### 快捷键
 
@@ -336,7 +342,7 @@ E:\picturePick\
 ├── backend/                  # Python 后端（FastAPI + uvicorn + Pillow）
 │   ├── picturepick/          # app / api / models / scanner / session / export / imaging / fsbrowse / cli
 │   │   └── birdid/           # AI 识鸟：config / client / parser / prompt / reference / exif / tasks / service
-│   ├── tests/                # pytest（285 个用例）
+│   ├── tests/                # pytest（292 个用例）
 │   └── pyproject.toml / requirements.txt
 ├── frontend/                 # TypeScript + Vite 前端（原生 DOM，无框架）
 │   └── src/                  # main / api / directory(取目录路径) / viewer / ui/*（ui/bird/* 为 AI 识鸟界面）
@@ -356,7 +362,7 @@ E:\picturePick\
 
 ## 从源码构建桌面版
 
-前置：Python 3.10+（含 pip）、Node.js 18+（npm）。首次需要安装依赖：
+前置：Python 3.12（含 pip；3.10 已 EOL，升级步骤见 [`docs/PYTHON-UPGRADE.md`](docs/PYTHON-UPGRADE.md)）、Node.js 18+（npm）。首次需要安装依赖：
 
 ```powershell
 python -m pip install -r backend\requirements.txt
@@ -393,9 +399,9 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithIn
 
 | 项目 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端单元/接口 | `cd backend; python -m pytest -q` | **285 passed**（含 AI 识鸟配置/完整端点双协议/任务/EXIF/解析/AI 参考图与联网搜索降级/SSRF/恢复/客户端容错） |
+| 后端单元/接口 | `cd backend; python -m pytest -q` | **292 passed**（含 AI 识鸟配置/完整端点双协议/任务/EXIF/解析/AI 参考图与联网搜索降级/SSRF/恢复/客户端容错） |
 | API 端到端（server/browser + export-photos + restore/resume + 旧版 JSON 兼容 + AI 识鸟 mock 链路） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | **PASS=238 / FAIL=0**（v4 既有 133 + AI 识鸟新增 105；mock 后端 8126） |
-| 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | **PASS=115 / FAIL=0**（v4 既有 71 + AI 识鸟新增 44；含快捷键 B、队列、原照片+参考照片对照、模态框 X 关闭、端点设置、左栏鸟种、结果页计数） |
+| 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | **PASS=122 / FAIL=0**（v4 既有 71 + AI 识鸟新增 51；含快捷键 B、队列、原照片+参考照片对照、模态框 X 关闭、端点设置、左栏鸟种、结果页计数） |
 | **真实 Key UI 全流程（非 mock）** | 真实方舟 Key + 真实网络（本机验证，脚本与截图在 `.tmp/` 下） | **PASS=15 / FAIL=0**（识鸟→AI 参考图→X 关闭→重开→采纳→左栏鸟种→结果页计数→结果 JSON） |
 | 桌面版 | `powershell -File scripts\verify-desktop.ps1` | 后端冻结自检通过；GUI 窗口验证进行中（见下） |
 

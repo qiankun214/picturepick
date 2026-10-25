@@ -1,4 +1,4 @@
-﻿# PicturePick 架构与工程约定（第 5.2 版）
+# PicturePick 架构与工程约定（第 5.2 版）
 
 ## 1. 目标交付物
 
@@ -15,7 +15,7 @@
 
 ## 2. 技术选型（均在广泛使用、社区活跃的项目中选取）
 
-- 后端：Python 3.10 + **FastAPI** + **uvicorn** + **Pillow**（缩略图 / 图片预处理 / EXIF）+ **pydantic**（1.10/2.x 兼容写法）
+- 后端：Python 3.12（3.10 已 EOL，升级见 [`PYTHON-UPGRADE.md`](PYTHON-UPGRADE.md)）+ **FastAPI** + **uvicorn** + **Pillow**（缩略图 / 图片预处理 / EXIF）+ **pydantic**（1.10/2.x 兼容写法）
 - 前端：**TypeScript** + **Vite**（原生 DOM，无框架，构建产物为静态 HTML/JS/CSS）
 - AI 识鸟：**火山方舟（Volcengine Ark）HTTP API**，模型 `doubao-seed-2-1-lite`；支持 Chat Completions 与
   Responses API 两种完整端点。客户端用 Python 标准库 `urllib.request` 实现（**不新增依赖**）；
@@ -41,7 +41,7 @@ E:\picturePick\
 │   │       ├── exif.py       #   无损写 JPEG EXIF（Pillow 序列化 + APP1 原位替换 + 原子替换）
 │   │       ├── tasks.py      #   BirdTask 数据、任务仓库、单线程 worker、进度/队列位置
 │   │       └── service.py    #   BirdService：配置 + 提交 + 采纳 + EXIF 写盘 + 会话联动 + 参考图缓存
-│   ├── tests/                # pytest（285 个用例）
+│   ├── tests/                # pytest（292 个用例）
 │   └── pyproject.toml / requirements.txt
 ├── frontend/                 # TypeScript + Vite 前端
 │   ├── src/
@@ -94,6 +94,9 @@ E:\picturePick\
 - 恢复相关的 UI 元素：`restore-button`、`restore-input`、`restore-notice`、`resume-button`。
 - 第 5 版：结果 JSON 新增可选字段 `birdIdentifiedCount` / `photos[].bird`；restore 会宽容读取
   （结构不合法则忽略该照片的鸟种），恢复后 `PhotoItem.bird` 与左栏鸟种立即生效，resume 后保留。
+- **v5.3 选片页状态保存**：选片页「保存 JSON」（`picker-save-json`）随时下载当前 `PickResult`
+  （`phase=picking`）；导入时按 `phase` 分流——picking 直接恢复为选片态（当前轮 pick 保留、可继续），
+  finished/旧 JSON 仍进结果页。旧 JSON 无 `phase` 字段默认 finished。
 
 ### 4.3 兼容说明
 

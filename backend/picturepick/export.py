@@ -91,6 +91,7 @@ def build_result(session: "Session") -> PickResult:
         totalPhotos=len(photos),
         roundsPlayed=len(session.rounds),
         pickedPhotoCount=sum(1 for item in photos if item.pickCount > 0),
+        phase=session.phase,
         birdIdentifiedCount=session.bird_identified_count,
         lastRound=build_last_round(session),
         photos=photos,

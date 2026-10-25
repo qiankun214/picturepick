@@ -75,6 +75,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const page = await context.newPage();
   const pageErrors = [];
   const imageRequests = [];
+  let stateJsonPath = '';
   page.on('pageerror', (e) => pageErrors.push(String(e)));
   page.on('request', (req) => {
     if (req.url().includes('/photos/') && req.url().includes('/image')) imageRequests.push(req.url());
@@ -194,6 +195,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.waitForTimeout(300);
   check('恢复 pick 后计数=3', (await text('stats-picked')).trim() === '3', await text('stats-picked'));
   await shot('05-picked.png');
+
+  console.log('\n[6.1] 选片页保存状态 JSON');
+  check('选片页存在「保存 JSON」按钮', await page.isVisible(ui('picker-save-json')));
+  const [stateDownload] = await Promise.all([
+    page.waitForEvent('download', { timeout: 15000 }),
+    page.click(ui('picker-save-json')),
+  ]);
+  stateJsonPath = await stateDownload.path();
+  const suggestedName = stateDownload.suggestedFilename();
+  const stateJson = JSON.parse(fs.readFileSync(stateJsonPath, 'utf8'));
+  check('状态 JSON phase=picking', stateJson.phase === 'picking', String(stateJson.phase));
+  check('状态 JSON 记录当前轮 pick 与轮次',
+    stateJson.roundsPlayed === 1 && (stateJson.photos || []).filter((p) => p.pickCount > 0).length === 3,
+    JSON.stringify({ roundsPlayed: stateJson.roundsPlayed, picked: (stateJson.photos || []).filter((p) => p.pickCount > 0).length }));
+  check('状态 JSON 文件名以 picturepick- 开头', suggestedName.startsWith('picturepick-'), suggestedName);
 
   console.log('\n[7] 结束本轮 → 进入下一轮');
   await page.click(ui('end-round-button'));
@@ -652,6 +668,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     String(await page.locator(ui('result-bird-pill')).count()));
   check('识鸟流程无页面未捕获异常', pageErrors.length === 0, pageErrors.join(' | '));
   await snap('bird-results.png');
+
+  console.log('\n[20] 导入选片状态 JSON 直接重启选片');
+  await page.click(ui('restart-button'));
+  await page.waitForSelector(ui('pick-folder-button'), { timeout: 10000 });
+  await page.setInputFiles(ui('restore-input'), stateJsonPath);
+  await page.waitForSelector(ui('picker-view'), { timeout: 30000 });
+  await page.waitForSelector(`${ui('viewer-image')}[data-loaded="true"]`, { timeout: 20000 });
+  check('导入选片状态 JSON 后直接进入选片页', true);
+  const restoredIndex = String((await text('stats-index')) || '').trim();
+  const restoredPicked = String((await text('stats-picked')) || '').trim();
+  check('恢复后仍为第 1 轮且保留 3 张',
+    restoredIndex === `1/${EXPECTED_TOTAL}` && restoredPicked === '3',
+    `${restoredIndex} / picked=${restoredPicked}`);
+  const restoredStateSession = await page.evaluate(async () => (await fetch('/api/sessions/current')).json());
+  check('恢复会话 phase=picking 且 roundIndex=1',
+    restoredStateSession.session.phase === 'picking' && restoredStateSession.session.roundIndex === 1,
+    JSON.stringify({ phase: restoredStateSession.session.phase, roundIndex: restoredStateSession.session.roundIndex }));
+  await shot('13-state-restored-picker.png');
 
   await browser.close();
   const summary = `\n===== 浏览器全流程 UI 验收: PASS=${pass} FAIL=${fail} =====`;

@@ -421,6 +421,9 @@ interface BirdObservation {
 - `PickResult.birdIdentifiedCount: number`。
 - `POST /api/sessions/restore`：接受带 `bird` 的 JSON，恢复后 `PhotoItem.bird` 立即生效；
   老 JSON（无 bird）继续可用。`schemaVersion` 仍为 `1`（仅新增可选字段）。
+- **v5.3 状态保存/导入**：`PickResult.phase`（`picking`/`finished`，缺省 finished）；
+  选片页「保存 JSON」（`picker-save-json`）下载 `phase=picking` 的当前状态，restore 后直接回到选片态
+  （当前轮 pick 保留，可继续）；finished/旧 JSON 恢复后进结果页；非法 phase → `INVALID_RESTORE`。
 - `BirdResult.referenceNote`：v5.2 起参考图缺失（如账号未开通「联网搜索」插件）时，worker 会把
   开通提示写入该字段（含 `https://console.volcengine.com/common-buy/CC_content_plugin`），
   前端在参考图占位处显示；`referenceAvailable` 仅当模型提供图片 URL 且后端下载成功时为 `true`。
@@ -557,11 +560,11 @@ footer.dock                        ← 原底部工具栏 + filmstrip 原样
 
 ## 10. 验收结果（v5.2，2026-10-25）
 
-- `pytest`：**285 passed**（既有 179 + 新增 106：配置/端点双协议/任务/EXIF 保真/解析/
+- `pytest`：**292 passed**（既有 179 + 新增 113：配置/端点双协议/任务/EXIF 保真/解析/
   模型参考图/ToolNotOpen 降级/SSRF 防护/结果恢复/客户端容错）。
 - `scripts/e2e_api.py`：**PASS=238 / FAIL=0**（既有 133 + 新增 105 项识鸟检查：
   status/config/endpoint/tasks/adopt/EXIF/reference/result/restore/dismiss/失败路径）。
-- `scripts/ui_e2e.cjs`：**PASS=115 / FAIL=0**（既有 71 + 新增 44 项：按钮/快捷键 B/队列卡片/
+- `scripts/ui_e2e.cjs`：**PASS=122 / FAIL=0**（既有 71 + 新增 51 项：按钮/快捷键 B/队列卡片/
   进度/原照片+参考照片并排对照/模态框 X 关闭/参考图/采纳/左栏鸟种/结果页计数/完整端点设置；
   Playwright Chromium + mock 后端）。
 - `frontend`：`npm run build`（tsc + vite）通过。

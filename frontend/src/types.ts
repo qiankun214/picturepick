@@ -86,6 +86,8 @@ export interface PickResult {
   totalPhotos: number;
   roundsPlayed: number;
   pickedPhotoCount: number;
+  /** 保存时会话状态：finished（结束生成）或 picking（选片页中途保存，可导入继续）。 */
+  phase?: SessionPhase;
   /** 本会话已采纳识别的照片数（结果 JSON 新增可选字段）。 */
   birdIdentifiedCount?: number;
   lastRound: LastRoundSummary;

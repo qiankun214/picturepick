@@ -128,12 +128,15 @@ class Session:
         created_at: Optional[datetime] = None,
         source_label: Optional[str] = None,
         bird_observations: Optional[Dict[str, BirdObservation]] = None,
+        phase: str = PHASE_FINISHED,
     ) -> "Session":
-        """由 ``POST /api/sessions/restore`` 重建的、``phase="finished"`` 的会话。
+        """由 ``POST /api/sessions/restore`` 重建的会话。
 
         ``root`` 用于图片/导出的路径安全校验；``source_label`` 用于展示与结果的
         ``sourceDirectory``（absolutePath 回退时保留 JSON 的原始 sourceDirectory）。
         ``bird_observations`` 来自结果 JSON 的 ``photos[].bird``（老 JSON 没有则为空）。
+        ``phase``：``finished``（默认/旧 JSON）或 ``picking``（选片页中途保存的 JSON，
+        恢复后直接回到选片）。
         """
         session = cls(
             uuid.uuid4().hex,
@@ -146,7 +149,7 @@ class Session:
             restored=True,
         )
         session.rounds = list(rounds)
-        session.phase = PHASE_FINISHED
+        session.phase = phase if phase in (PHASE_PICKING, PHASE_FINISHED) else PHASE_FINISHED
         # 恢复后的结果按当前（重建的）状态实时生成，不冻结上次的 generatedAt。
         session._finished_result = None
         if bird_observations:

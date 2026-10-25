@@ -62,6 +62,8 @@ class RestorePlan:
     source_directory: str
     recursive: bool
     rounds_played: int
+    #: JSON 保存时的会话状态：finished（默认/旧 JSON）或 picking
+    phase: str = "finished"
     #: casefold(relativePath) -> pickedInRounds（升序）
     picked_rounds_by_path: Dict[str, List[int]] = field(default_factory=dict)
     #: casefold(relativePath) -> JSON 原始 relativePath
@@ -88,6 +90,15 @@ def _require_int(value: Any, field_name: str, minimum: int = 0, maximum: int | N
     if maximum is not None and value > maximum:
         raise ApiError(INVALID_RESTORE, f"{field_name} 不能大于 {maximum}")
     return value
+
+
+def _parse_phase(raw: Any) -> str:
+    """解析结果 JSON 的 ``phase``（v5.3 起：选片页保存的状态 JSON 为 picking）。"""
+    if raw is None:
+        return "finished"  # 旧 JSON 默认按结束态处理
+    if isinstance(raw, str) and raw.strip().lower() in ("picking", "finished"):
+        return raw.strip().lower()
+    raise ApiError(INVALID_RESTORE, f"phase 只能是 picking 或 finished（当前: {raw!r}）")
 
 
 def _text_or_empty(value: Any, limit: int = 200) -> str:
@@ -254,6 +265,7 @@ def parse_pick_result(payload: Any) -> RestorePlan:
         source_directory=source_directory,
         recursive=recursive,
         rounds_played=rounds_played,
+        phase=_parse_phase(payload.get("phase")),
     )
     for entry in entries:
         plan.picked_rounds_by_path[entry.key] = entry.picked_rounds
@@ -360,12 +372,7 @@ def _rebuild_rounds(plan: RestorePlan, photos: List[ScannedPhoto]) -> List[Round
             continue
         picked_rounds_by_id[photo.id] = set(picked_rounds)
 
-    if not picked_rounds_by_id:
-        raise ApiError(
-            INVALID_PATH,
-            f"无法访问 JSON 中的源目录或照片：{plan.source_directory}"
-            "；请确认网络盘/移动盘已连接，或照片未被移动",
-        )
+    # 选片页中途保存的状态 JSON 可能一张都还没 pick：仍然可以恢复（第 1 轮全部照片）
 
     rounds: List[Round] = [Round(1, [photo.id for photo in photos])]
     for round_number in range(2, plan.rounds_played + 1):
@@ -440,6 +447,7 @@ def restore_session(payload: Any, store: SessionStore) -> Session:
         rounds=rounds,
         source_label=source_label,
         bird_observations=bird_observations,
+        phase=plan.phase,
     )
     store.add(session)
     return session

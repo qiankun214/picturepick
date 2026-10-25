@@ -8,7 +8,8 @@
  */
 import * as api from '../api';
 import { ApiError, errorText, photoImageUrl, photoThumbUrl } from '../api';
-import { formatBytes, loadPreferences, setIntervalSeconds } from '../state';
+import { isDesktop, safeSaveJson } from '../desktop';
+import { buildResultFileName, formatBytes, loadPreferences, setIntervalSeconds } from '../state';
 import type { BirdAdoptResponse, BirdTask, PhotoItem, PickResult, SessionSummary } from '../types';
 import { ImageViewer } from '../viewer';
 import { escapeHtml, icon, qs, qsa } from './dom';
@@ -184,6 +185,9 @@ export class PickerView {
             </div>
           </div>
           <div class="topbar__actions">
+            <button type="button" class="btn btn--ghost" data-action="save-json" data-testid="picker-save-json" title="下载当前状态 JSON（之后可在启动页载入恢复）">
+              ${icon('download')}<span class="btn__label">保存 JSON</span>
+            </button>
             <button type="button" class="btn btn--bird bird-identify-button" data-action="bird-identify" data-testid="bird-identify-button" title="AI 识鸟 (B)">
               ${icon('bird')}<span class="btn__label">AI 识鸟</span><kbd class="btn__kbd">B</kbd>
             </button>
@@ -484,6 +488,9 @@ export class PickerView {
       case 'fullscreen':
         void this.toggleFullscreen();
         break;
+      case 'save-json':
+        void this.saveStateJson();
+        break;
       case 'bird-identify':
         void this.submitCurrentPhoto();
         break;
@@ -579,6 +586,39 @@ export class PickerView {
         break;
     }
   };
+
+  /* ------------------------------ 保存状态 JSON ------------------------------ */
+
+  /** 下载当前会话状态 JSON（含 sourceDirectory/pickCount/pickedInRounds/phase），
+   *  之后可在启动页「载入 JSON 恢复现场」直接回到选片/结果。 */
+  private async saveStateJson(): Promise<void> {
+    if (this.destroyed) return;
+    const sessionId = this.session.id;
+    if (!sessionId) {
+      showToast('无法定位当前会话，请重新选片', 'error');
+      return;
+    }
+    try {
+      if (isDesktop()) {
+        const latest = await api.getResult(sessionId);
+        const content = JSON.stringify(latest, null, 2);
+        const saved = await safeSaveJson(buildResultFileName(latest.sourceDirectory), content);
+        if (saved) showToast(`已保存当前状态到 ${saved}（可在启动页载入恢复）`, 'success', 5600);
+        else showToast('已取消保存', 'info');
+      } else {
+        const anchor = document.createElement('a');
+        anchor.href = api.resultDownloadUrl(sessionId);
+        anchor.download = buildResultFileName(this.session.root);
+        anchor.rel = 'noopener';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        showToast('已开始下载当前状态 JSON（可在启动页载入恢复）', 'success', 4800);
+      }
+    } catch (error) {
+      showToast(`保存状态失败：${errorText(error)}`, 'error', 5200);
+    }
+  }
 
   private async togglePick(): Promise<void> {
     if (this.destroyed) return;
