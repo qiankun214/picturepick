@@ -93,3 +93,48 @@ def error_code(response) -> str:
 
 def ids_of(photos: Iterable[dict]) -> List[str]:
     return [photo["id"] for photo in photos]
+
+
+# ---- AI 识鸟（第 5 版） ----------------------------------------------------
+
+
+def create_bird_task(client, session_id: str, photo_id: str):
+    return client.post(
+        f"/api/sessions/{session_id}/bird-tasks", json={"photoId": photo_id}
+    )
+
+
+def get_bird_tasks(client, session_id: str) -> dict:
+    response = client.get(f"/api/sessions/{session_id}/bird-tasks")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def wait_bird_task(client, session_id: str, task_id: str, timeout: float = 10.0) -> dict:
+    """轮询单个任务直到进入终态（completed / failed / adopted / dismissed）。"""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/sessions/{session_id}/bird-tasks/{task_id}")
+        assert response.status_code == 200, response.text
+        task = response.json()
+        if task["status"] in ("completed", "failed", "adopted", "dismissed"):
+            return task
+        time.sleep(0.01)
+    raise AssertionError(f"任务在 {timeout}s 内未完成: {task}")
+
+
+def submit_and_wait(client, session_id: str, photo_id: str, timeout: float = 10.0) -> dict:
+    response = create_bird_task(client, session_id, photo_id)
+    assert response.status_code == 201, response.text
+    task = response.json()
+    return wait_bird_task(client, session_id, task["id"], timeout=timeout)
+
+
+def wait_bird_idle(client, timeout: float = 10.0) -> bool:
+    """等待识鸟任务 worker 清空队列（避免测试结束时后台仍访问网络）。"""
+    service = getattr(client.app.state, "bird", None)
+    if service is None:
+        return True
+    return service.wait_idle(timeout=timeout)

@@ -44,6 +44,10 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
     .filter((photo): photo is PickedPhoto => Boolean(photo));
 
   const restored = Boolean(session?.restored);
+  // AI 识鸟：优先用结果 JSON 里的计数；老 JSON 无该字段时按 photos[].bird 兜底。
+  const birdIdentifiedCount = Number.isFinite(result.birdIdentifiedCount)
+    ? Math.max(0, Number(result.birdIdentifiedCount))
+    : photos.reduce((count, photo) => count + (photo.bird ? 1 : 0), 0);
   // 已结束的 server 会话、最后一轮保留 >= 2 张时可继续筛选（契约 §4 resume / §8.3）。
   const canResume =
     Boolean(sessionId) &&
@@ -90,6 +94,15 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
             <span>${formatDateTime(result.generatedAt)} 生成</span>
             <span class="dot">·</span>
             <span>${result.roundsPlayed} 轮筛选</span>
+          </p>
+
+          <p class="results-bird" data-testid="bird-identified-count">
+            ${icon('bird')}
+            ${
+              birdIdentifiedCount > 0
+                ? `AI 识鸟：<strong>${birdIdentifiedCount}</strong> 张已记录鸟种`
+                : '未使用 AI 识鸟'
+            }
           </p>
 
           ${
@@ -231,6 +244,12 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
           .map((round) => `<span class="round-dot" title="第 ${round} 轮保留">R${round}</span>`)
           .join('');
         const thumbUrl = thumbsEnabled && sessionId ? photoThumbUrl(sessionId, photo.id) : '';
+        const bird = photo.bird ?? null;
+        const birdSpecies = String(bird?.species ?? '').trim();
+        const birdPill =
+          bird && birdSpecies
+            ? `<span class="bird-pill" data-testid="result-bird-pill" title="科：${escapeHtml(bird.family)}${bird.familyLatin ? `（${escapeHtml(bird.familyLatin)}）` : ''} · 属：${escapeHtml(bird.genus)}${bird.genusLatin ? `（${escapeHtml(bird.genusLatin)}）` : ''} · 拉丁名：${escapeHtml(bird.speciesLatin || '—')}">${icon('bird')}${escapeHtml(birdSpecies)}</span>`
+            : '';
         return `
           <article class="result-row ${isPicked ? 'is-picked' : ''}">
             ${
@@ -244,6 +263,7 @@ export function mountResultsView(root: HTMLElement, options: ResultsViewOptions)
               <div class="result-row__name">
                 <span class="result-row__filename" title="${escapeHtml(photo.absolutePath || photo.relativePath)}">${escapeHtml(photo.name)}</span>
                 ${isPicked ? `<span class="pick-pill">${icon('star-filled')} ×${photo.pickCount}</span>` : ''}
+                ${birdPill}
               </div>
               <div class="result-row__path">${escapeHtml(photo.relativePath)}</div>
             </div>

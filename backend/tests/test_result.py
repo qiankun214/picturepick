@@ -79,6 +79,7 @@ def test_finish_result_structure(client, library):
             "absolutePath",
             "pickCount",
             "pickedInRounds",
+            "bird",
         }
         assert os.path.isabs(photo["absolutePath"])
 

@@ -9,12 +9,16 @@
 import * as api from '../api';
 import { ApiError, errorText, photoImageUrl, photoThumbUrl } from '../api';
 import { formatBytes, loadPreferences, setIntervalSeconds } from '../state';
-import type { PhotoItem, PickResult, SessionSummary } from '../types';
+import type { BirdAdoptResponse, BirdTask, PhotoItem, PickResult, SessionSummary } from '../types';
 import { ImageViewer } from '../viewer';
 import { escapeHtml, icon, qs, qsa } from './dom';
 import { Filmstrip } from './filmstrip';
 import { isModalOpen, openModal } from './modal';
 import { showToast } from './toast';
+import { renderPhotoInfo } from './bird/info';
+import { BirdQueue } from './bird/queue';
+import { openBirdResultModal } from './bird/resultModal';
+import { openBirdSettingsModal } from './bird/settings';
 
 export interface PickerViewOptions {
   session: SessionSummary;
@@ -40,10 +44,21 @@ interface PickerDom {
   progress: HTMLElement;
   filmstripRoot: HTMLElement;
   fullscreenButton: HTMLButtonElement;
+  infoBody: HTMLElement;
+  birdQueueRoot: HTMLElement;
 }
 
 const MIN_INTERVAL = 1;
 const MAX_INTERVAL = 120;
+
+/** 左右栏折叠状态（localStorage 记忆，见契约 §8.1）。 */
+const PANEL_STATE_KEY = 'picturepick.birdPanels.v1';
+const NARROW_WIDTH = 1180;
+
+interface BirdPanelState {
+  info: boolean;
+  queue: boolean;
+}
 
 function clampIndex(value: number, max: number): number {
   return Math.max(0, Math.min(max, value));
@@ -58,6 +73,12 @@ export class PickerView {
   private viewer: ImageViewer | null = null;
   private filmstrip: Filmstrip | null = null;
   private dom!: PickerDom;
+
+  /* AI 识鸟 */
+  private birdQueue: BirdQueue | null = null;
+  private birdConfigured: boolean | null = null;
+  private readonly birdSubmitting = new Set<string>();
+  private panelState: BirdPanelState = { info: false, queue: false };
 
   private playing = false;
   private autoplayTimer = 0;
@@ -77,10 +98,12 @@ export class PickerView {
   async mount(): Promise<void> {
     this.render();
     this.dom = this.collectDom();
+    this.loadPanelState();
     this.viewer = new ImageViewer(this.dom.viewerHost, {
       onLoad: (info) => {
         this.imageSize = info;
         this.renderMeta();
+        this.renderInfo();
       },
       onZoom: (percent) => {
         if (this.dom) this.dom.zoomLabel.textContent = `${percent}%`;
@@ -89,12 +112,21 @@ export class PickerView {
     this.filmstrip = new Filmstrip(this.dom.filmstripRoot, this.session.id, (index) => {
       this.showPhoto(index);
     });
+    this.birdQueue = new BirdQueue({
+      root: this.dom.birdQueueRoot,
+      sessionId: this.session.id,
+      onOpenTask: (task) => this.openBirdTask(task),
+    });
+    this.birdQueue.mount();
+    this.applyPanelState();
     this.dom.intervalInput.value = String(this.intervalSeconds);
+    this.renderInfo();
     this.root.addEventListener('click', this.handleClick);
     this.dom.intervalInput.addEventListener('change', this.handleIntervalChange);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
     this.updateAutoplayButton();
+    void this.refreshBirdStatus();
     await this.loadRound();
   }
 
@@ -107,6 +139,8 @@ export class PickerView {
     this.dom?.intervalInput.removeEventListener('change', this.handleIntervalChange);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+    this.birdQueue?.destroy();
+    this.birdQueue = null;
     this.viewer?.destroy();
     this.filmstrip?.destroy();
     this.viewer = null;
@@ -150,6 +184,12 @@ export class PickerView {
             </div>
           </div>
           <div class="topbar__actions">
+            <button type="button" class="btn btn--bird bird-identify-button" data-action="bird-identify" data-testid="bird-identify-button" title="AI 识鸟 (B)">
+              ${icon('bird')}<span class="btn__label">AI 识鸟</span><kbd class="btn__kbd">B</kbd>
+            </button>
+            <button type="button" class="icon-btn" data-action="bird-settings" data-testid="bird-settings-button" title="AI 识鸟设置">
+              ${icon('settings')}
+            </button>
             <button type="button" class="btn btn--ghost" data-action="fullscreen" data-testid="fullscreen-button" title="全屏 (F)">
               ${icon('maximize')}<span class="btn__label">全屏</span>
             </button>
@@ -161,13 +201,32 @@ export class PickerView {
 
         <div class="progress"><div class="progress__fill" data-role="progress"></div></div>
 
-        <main class="stage" data-role="stage">
-          <div class="viewer-host" data-role="viewer-host"></div>
-          <button type="button" class="stage-nav stage-nav--prev" data-action="prev" data-testid="prev-button" title="上一张 (←)">${icon('chevron-left')}</button>
-          <button type="button" class="stage-nav stage-nav--next" data-action="next" data-testid="next-button" title="下一张 (→)">${icon('chevron-right')}</button>
-          <div class="stage-meta" data-role="meta"></div>
-          <div class="stage-badge" data-role="pick-badge" hidden>${icon('star-filled')}<span>已保留</span></div>
-          <div class="stage-overlay" data-role="overlay" hidden></div>
+        <main class="workspace" data-role="workspace">
+          <aside class="photo-info" data-testid="photo-info" data-role="photo-info" aria-label="图片信息">
+            <header class="photo-info__head">
+              <span class="photo-info__title">${icon('image')}<span>图片信息</span></span>
+              <button
+                type="button"
+                class="icon-btn photo-info__toggle"
+                data-action="toggle-info"
+                data-testid="photo-info-toggle"
+                title="收起图片信息"
+                aria-expanded="true"
+              >${icon('chevron-left')}</button>
+            </header>
+            <div class="photo-info__body" data-role="photo-info-body"></div>
+          </aside>
+
+          <section class="stage" data-role="stage">
+            <div class="viewer-host" data-role="viewer-host"></div>
+            <button type="button" class="stage-nav stage-nav--prev" data-action="prev" data-testid="prev-button" title="上一张 (←)">${icon('chevron-left')}</button>
+            <button type="button" class="stage-nav stage-nav--next" data-action="next" data-testid="next-button" title="下一张 (→)">${icon('chevron-right')}</button>
+            <div class="stage-meta" data-role="meta"></div>
+            <div class="stage-badge" data-role="pick-badge" hidden>${icon('star-filled')}<span>已保留</span></div>
+            <div class="stage-overlay" data-role="overlay" hidden></div>
+          </section>
+
+          <aside class="bird-queue" data-testid="bird-queue" data-role="bird-queue" aria-label="AI 识鸟队列"></aside>
         </main>
 
         <footer class="dock">
@@ -234,6 +293,8 @@ export class PickerView {
       progress: qs<HTMLElement>(this.root, '[data-role="progress"]'),
       filmstripRoot: qs<HTMLElement>(this.root, '[data-role="filmstrip"]'),
       fullscreenButton: qs<HTMLButtonElement>(this.root, '[data-testid="fullscreen-button"]'),
+      infoBody: qs<HTMLElement>(this.root, '[data-role="photo-info-body"]'),
+      birdQueueRoot: qs<HTMLElement>(this.root, '[data-role="bird-queue"]'),
     };
   }
 
@@ -338,6 +399,7 @@ export class PickerView {
     this.dom.pickBadge.hidden = !isPicked;
 
     this.renderMeta();
+    this.renderInfo();
   }
 
   private renderMeta(): void {
@@ -422,6 +484,18 @@ export class PickerView {
       case 'fullscreen':
         void this.toggleFullscreen();
         break;
+      case 'bird-identify':
+        void this.submitCurrentPhoto();
+        break;
+      case 'bird-settings':
+        this.openBirdSettings();
+        break;
+      case 'toggle-info':
+        this.togglePanel('info');
+        break;
+      case 'toggle-queue':
+        this.togglePanel('queue');
+        break;
       default:
         break;
     }
@@ -493,6 +567,11 @@ export class PickerView {
         event.preventDefault();
         void this.toggleFullscreen();
         break;
+      case 'b':
+      case 'B':
+        event.preventDefault();
+        void this.submitCurrentPhoto();
+        break;
       case 'Escape':
         if (document.fullscreenElement) void document.exitFullscreen();
         break;
@@ -538,6 +617,171 @@ export class PickerView {
       this.pickingInFlight.delete(photo.id);
       if (!this.destroyed) this.dom.pickButton.disabled = false;
     }
+  }
+
+  /* ------------------------------ AI 识鸟 ------------------------------ */
+
+  /** 读取左右栏折叠状态：没有历史记录时窄窗口默认收起。 */
+  private loadPanelState(): void {
+    let stored: Partial<BirdPanelState> | null = null;
+    try {
+      const raw = window.localStorage.getItem(PANEL_STATE_KEY);
+      if (raw) stored = JSON.parse(raw) as Partial<BirdPanelState>;
+    } catch {
+      stored = null;
+    }
+    const narrow = window.innerWidth < NARROW_WIDTH;
+    this.panelState = {
+      info: typeof stored?.info === 'boolean' ? stored.info : narrow,
+      queue: typeof stored?.queue === 'boolean' ? stored.queue : narrow,
+    };
+  }
+
+  private savePanelState(): void {
+    try {
+      window.localStorage.setItem(PANEL_STATE_KEY, JSON.stringify(this.panelState));
+    } catch {
+      // 隐私模式等不可写场景静默降级为仅本次生效。
+    }
+  }
+
+  private applyPanelState(): void {
+    if (!this.root || this.destroyed) return;
+    const pickerEl = this.root.querySelector<HTMLElement>('.picker');
+    if (pickerEl) {
+      pickerEl.classList.toggle('is-info-collapsed', this.panelState.info);
+      pickerEl.classList.toggle('is-queue-collapsed', this.panelState.queue);
+    }
+    const infoToggle = this.root.querySelector<HTMLButtonElement>('[data-testid="photo-info-toggle"]');
+    if (infoToggle) {
+      const expanded = !this.panelState.info;
+      infoToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      infoToggle.title = expanded ? '收起图片信息' : '展开图片信息';
+    }
+    const queueToggle = this.root.querySelector<HTMLButtonElement>('[data-testid="bird-queue-toggle"]');
+    if (queueToggle) {
+      const expanded = !this.panelState.queue;
+      queueToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      queueToggle.title = expanded ? '收起 AI 识鸟队列' : '展开 AI 识鸟队列';
+    }
+  }
+
+  private togglePanel(which: 'info' | 'queue'): void {
+    if (which === 'info') this.panelState.info = !this.panelState.info;
+    else this.panelState.queue = !this.panelState.queue;
+    this.savePanelState();
+    this.applyPanelState();
+  }
+
+  private renderInfo(): void {
+    if (!this.dom || this.destroyed) return;
+    renderPhotoInfo(this.dom.infoBody, {
+      photo: this.currentPhoto(),
+      dimensions: this.imageSize,
+    });
+  }
+
+  private async refreshBirdStatus(): Promise<void> {
+    try {
+      const status = await api.getBirdStatus();
+      if (this.destroyed) return;
+      this.birdConfigured = status.configured;
+    } catch {
+      // 配置状态读取失败不阻塞选片；真正提交时以后端错误为准。
+      if (!this.destroyed) this.birdConfigured = null;
+    }
+  }
+
+  private openBirdSettings(): void {
+    if (this.destroyed) return;
+    openBirdSettingsModal({
+      onSaved: (status) => {
+        this.birdConfigured = status.configured;
+      },
+    });
+  }
+
+  /** 顶部按钮 / B 快捷键：对当前照片提交识别任务。 */
+  private async submitCurrentPhoto(): Promise<void> {
+    if (this.destroyed) return;
+    const photo = this.currentPhoto();
+    if (!photo) {
+      showToast('当前没有可以识别的照片', 'info', 2400);
+      return;
+    }
+    if (this.birdConfigured === false) {
+      showToast('尚未配置 AI 识鸟，请先填写火山方舟 API Key', 'warn', 4800);
+      this.openBirdSettings();
+      return;
+    }
+    await this.submitBirdTask(photo.id, photo.name);
+  }
+
+  /** 提交识别任务（不阻塞选片/自动放映；同一 active 任务由后端复用）。 */
+  private async submitBirdTask(photoId: string, photoName: string): Promise<void> {
+    if (this.destroyed || this.birdSubmitting.has(photoId)) return;
+    if (this.birdQueue?.findActiveByPhoto(photoId)) {
+      showToast('该照片已在识别队列中', 'info', 3200);
+      return;
+    }
+    this.birdSubmitting.add(photoId);
+    try {
+      const task = await api.createBirdTask(this.session.id, photoId);
+      if (this.destroyed) return;
+      this.birdQueue?.replaceTask(task);
+      void this.birdQueue?.refreshNow();
+      showToast(`已提交 AI 识鸟任务 · ${photoName}`, 'success', 3200);
+    } catch (error) {
+      if (this.destroyed) return;
+      if (error instanceof ApiError) {
+        switch (error.code) {
+          case 'BIRD_NOT_CONFIGURED':
+            this.birdConfigured = false;
+            showToast('尚未配置 AI 识鸟，请先填写火山方舟 API Key', 'warn', 4800);
+            this.openBirdSettings();
+            return;
+          case 'PHASE_FINISHED':
+            showToast('本轮选片已结束，无法提交 AI 识鸟任务', 'warn', 4200);
+            return;
+          default:
+            showToast(errorText(error), 'error', 5200);
+            return;
+        }
+      }
+      showToast(errorText(error), 'error', 5200);
+    } finally {
+      this.birdSubmitting.delete(photoId);
+    }
+  }
+
+  private openBirdTask(task: BirdTask): void {
+    if (this.destroyed) return;
+    const latest = this.birdQueue?.taskById(task.id) ?? task;
+    openBirdResultModal({
+      sessionId: this.session.id,
+      task: latest,
+      onAdopted: (response) => this.handleBirdAdopted(response),
+      onDismissed: (updated) => {
+        this.birdQueue?.replaceTask(updated);
+        void this.birdQueue?.refreshNow();
+      },
+      onRetry: () => {
+        void this.submitBirdTask(latest.photoId, latest.photoName);
+      },
+    });
+  }
+
+  /** 采纳成功：立即更新队列卡片与当前照片 / 左栏（结果页在结束时从后端重新读取）。 */
+  private handleBirdAdopted(response: BirdAdoptResponse): void {
+    if (this.destroyed) return;
+    this.birdQueue?.replaceTask(response.task);
+    void this.birdQueue?.refreshNow();
+    const photoId = response.task?.photoId;
+    if (!photoId) return;
+    const photo = this.photos.find((item) => item.id === photoId);
+    if (!photo) return;
+    photo.bird = response.observation;
+    if (this.currentPhoto() === photo) this.renderInfo();
   }
 
   /* ------------------------------ 自动放映 ------------------------------ */

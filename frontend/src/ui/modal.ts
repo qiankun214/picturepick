@@ -52,7 +52,7 @@ export function openModal(options: ModalOptions): ModalHandle {
           <h2 class="modal__title">${escapeHtml(options.title)}</h2>
           ${options.subtitle ? `<p class="modal__subtitle">${escapeHtml(options.subtitle)}</p>` : ''}
         </div>
-        ${dismissible ? `<button type="button" class="icon-btn modal__close" aria-label="关闭">${icon('x')}</button>` : ''}
+        ${dismissible ? `<button type="button" class="icon-btn modal__close" data-testid="modal-close" aria-label="关闭">${icon('x')}</button>` : ''}
       </header>
       <div class="modal__body"></div>
       <footer class="modal__foot"></footer>
@@ -84,6 +84,9 @@ export function openModal(options: ModalOptions): ModalHandle {
     }
   };
   document.addEventListener('keydown', onKeyDown, true);
+
+  // 右上角 X：此前漏绑点击事件（导致无法关闭），这里显式绑定。
+  backdrop.querySelector<HTMLButtonElement>('.modal__close')?.addEventListener('click', () => close());
 
   const footer = qs<HTMLElement>(backdrop, '.modal__foot');
   for (const action of options.actions ?? []) {

@@ -45,6 +45,7 @@ from .errors import (
     UNSUPPORTED_SCHEMA,
     ApiError,
 )
+from .models import BirdObservation
 from .session import ORIGIN_SERVER, Round, Session, SessionStore
 from .scanner import ScannedPhoto
 
@@ -69,6 +70,8 @@ class RestorePlan:
     name_by_key: Dict[str, str] = field(default_factory=dict)
     #: casefold(relativePath) -> JSON absolutePath（v1 JSON 回退时使用，可能为空）
     absolute_path_by_key: Dict[str, str] = field(default_factory=dict)
+    #: casefold(relativePath) -> 已采纳的鸟类识别（第 5 版；老 JSON 为空）
+    bird_by_key: Dict[str, BirdObservation] = field(default_factory=dict)
     #: JSON photos 的原始顺序（回退重建时作为第 1 轮顺序）
     ordered_keys: List[str] = field(default_factory=list)
     #: JSON 照片 id -> relativePath（用于映射 lastRound.pickedPhotoIds）
@@ -87,6 +90,45 @@ def _require_int(value: Any, field_name: str, minimum: int = 0, maximum: int | N
     return value
 
 
+def _text_or_empty(value: Any, limit: int = 200) -> str:
+    if isinstance(value, str):
+        return value.strip()[:limit]
+    return ""
+
+
+def _parse_bird_observation(raw: Any) -> Optional[BirdObservation]:
+    """宽容解析结果 JSON 的 ``photos[].bird``；结构不合法时忽略（不报错）。"""
+    if not isinstance(raw, dict):
+        return None
+    species = _text_or_empty(raw.get("species"))
+    family = _text_or_empty(raw.get("family"))
+    genus = _text_or_empty(raw.get("genus"))
+    if not (species or family or genus):
+        return None
+    confidence = None
+    raw_confidence = raw.get("confidence")
+    if isinstance(raw_confidence, (int, float)) and not isinstance(raw_confidence, bool):
+        confidence = max(0.0, min(1.0, float(raw_confidence)))
+    exif_written = raw.get("exifWritten") if isinstance(raw.get("exifWritten"), bool) else False
+    exif_error = raw.get("exifError")
+    return BirdObservation(
+        family=family,
+        familyLatin=_text_or_empty(raw.get("familyLatin")),
+        genus=genus,
+        genusLatin=_text_or_empty(raw.get("genusLatin")),
+        species=species,
+        speciesLatin=_text_or_empty(raw.get("speciesLatin")),
+        commonNameEn=_text_or_empty(raw.get("commonNameEn")),
+        confidence=confidence,
+        note=_text_or_empty(raw.get("note"), limit=500),
+        referenceSource=_text_or_empty(raw.get("referenceSource")),
+        model=_text_or_empty(raw.get("model")),
+        adoptedAt=_text_or_empty(raw.get("adoptedAt")),
+        exifWritten=exif_written,
+        exifError=_text_or_empty(exif_error, limit=500) or None,
+    )
+
+
 @dataclass
 class _PhotoEntry:
     key: str
@@ -95,6 +137,7 @@ class _PhotoEntry:
     absolute_path: str
     picked_rounds: List[int]
     json_id: str
+    bird: Optional[BirdObservation] = None
 
 
 def _parse_photo_entries(photos_raw: List[Any]) -> List[_PhotoEntry]:
@@ -142,6 +185,7 @@ def _parse_photo_entries(photos_raw: List[Any]) -> List[_PhotoEntry]:
                 absolute_path=absolute_path,
                 picked_rounds=picked_rounds,
                 json_id=json_id if isinstance(json_id, str) else "",
+                bird=_parse_bird_observation(raw.get("bird")),
             )
         )
     return entries
@@ -218,6 +262,8 @@ def parse_pick_result(payload: Any) -> RestorePlan:
         if entry.absolute_path:
             plan.absolute_path_by_key[entry.key] = entry.absolute_path
         plan.ordered_keys.append(entry.key)
+        if entry.bird is not None:
+            plan.bird_by_key[entry.key] = entry.bird
         if entry.json_id:
             plan.relative_path_by_id[entry.json_id] = entry.relative_path
 
@@ -381,12 +427,19 @@ def restore_session(payload: Any, store: SessionStore) -> Session:
         recursive = plan.recursive
 
     rounds = _rebuild_rounds(plan, photos)
+    bird_observations: Dict[str, BirdObservation] = {}
+    photos_by_key = {photo.relative_path.casefold(): photo for photo in photos}
+    for key, observation in plan.bird_by_key.items():
+        matched = photos_by_key.get(key)
+        if matched is not None:
+            bird_observations[matched.id] = observation
     session = Session.from_restore(
         root=root,
         recursive=recursive,
         photos=photos,
         rounds=rounds,
         source_label=source_label,
+        bird_observations=bird_observations,
     )
     store.add(session)
     return session

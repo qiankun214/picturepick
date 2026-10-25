@@ -4,7 +4,16 @@
     python scripts/e2e_api.py --base-url http://127.0.0.1:8123 --photos-dir samples/photos
 
 它会完整走一遍：健康检查 → 目录浏览 → 创建会话 → 分页/图片/缩略图 → 浏览 & pick 计数 →
-连续多轮筛选 → 结束生成结果 JSON → 下载/导出 → 错误码校验，任何断言失败即非 0 退出。
+连续多轮筛选 → 结束生成结果 JSON → 下载/导出 → 错误码校验，
+最后追加「AI 识鸟」链路（配置/状态/连通性 → 提交任务与队列 → 进度/参考图 → 采纳与 EXIF 写回
+→ 忽略/失败分支 → 结果 JSON / restore 保留 bird）。
+
+AI 识鸟部分需要后端以模拟模式运行（不访问网络）：
+    $env:PICTUREPICK_BIRD_MOCK='1'; $env:PICTUREPICK_BIRD_MOCK_DELAY='0.25'
+    $env:PICTUREPICK_CONFIG_DIR='E:\picturePick\.scratch\e2e-config'
+    python -m picturepick serve --port 8126 --no-open
+识鸟会修改照片 EXIF，因此脚本把照片目录复制到 ``--out-dir/bird-photos`` 后再采纳，
+不会改动原始照片目录；配置在章节结束前恢复。
 """
 
 from __future__ import annotations
@@ -15,6 +24,7 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import httpx
@@ -479,6 +489,423 @@ def main() -> int:
         check("INVALID_PATH 消息包含源目录原文",
               "moved-or-renamed-dir" in broken_resp.json().get("detail", {}).get("message", ""),
               broken_resp.text[:300])
+
+        # ------------------------------------------------------------------
+        # AI 识鸟（docs/BIRDID-CONTRACT.md §6/§7/§9）：需要后端以 mock 模式启动。
+        # 采纳会写照片 EXIF，因此先复制照片目录，避免改动原始照片。
+        # ------------------------------------------------------------------
+        print("\n[14] AI 识鸟：配置 / 状态 / 连通性（mock 模式）")
+        try:
+            bird_dir = out_dir / "bird-photos"
+            if bird_dir.exists():
+                shutil.rmtree(bird_dir)
+            shutil.copytree(photos_dir, bird_dir)
+            bird_expected = sorted(
+                p for p in bird_dir.rglob("*") if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg"}
+            )
+            check("识鸟用照片副本已创建", len(bird_expected) == len(expected),
+                  f"{len(bird_expected)} vs {len(expected)}")
+
+            def poll_task(session_id: str, task_id: str, timeout: float = 30.0) -> dict:
+                deadline = time.monotonic() + timeout
+                last: dict = {}
+                while time.monotonic() < deadline:
+                    resp = c.get(f"/api/sessions/{session_id}/bird-tasks/{task_id}")
+                    if resp.status_code != 200:
+                        return last
+                    last = resp.json()
+                    if last.get("status") in ("completed", "failed", "adopted", "dismissed"):
+                        return last
+                    time.sleep(0.1)
+                return last
+
+            def jpeg_tail(data: bytes) -> bytes:
+                """SOS 段起点到文件尾（图像压缩数据 + EOI），EXIF 改写不应影响它。"""
+                pos = data.find(b"\xff\xda")
+                return data[pos:] if pos >= 0 else b""
+
+            def xp_text(exif, tag: int) -> str:
+                raw = exif.get(tag)
+                if isinstance(raw, bytes):
+                    return raw.decode("utf-16-le", "replace").rstrip("\x00")
+                return str(raw or "")
+
+            status0_resp = c.get("/api/bird/status")
+            check("GET /api/bird/status 200", status0_resp.status_code == 200, status0_resp.text[:200])
+            status0 = status0_resp.json()
+            check("mock 模式 configured=true 且 mock=true",
+                  status0.get("configured") is True and status0.get("mock") is True, json.dumps(status0)[:300])
+            check("默认模型为 doubao-seed-2-1-lite", status0.get("model") == "doubao-seed-2-1-lite",
+                  str(status0.get("model")))
+            check("mock 模式 keyMasked=null 且 keySource=mock",
+                  status0.get("keyMasked") is None and status0.get("keySource") == "mock", json.dumps(status0)[:300])
+            check("status.queue 含 queued/running 计数",
+                  isinstance(status0.get("queue"), dict) and {"queued", "running"} <= set(status0["queue"]),
+                  json.dumps(status0.get("queue")))
+            check("status.endpoint 为完整 Chat Completions 端点",
+                  status0.get("endpoint") == "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+                  str(status0.get("endpoint")))
+            check("status.endpointProtocol=chat",
+                  status0.get("endpointProtocol") == "chat", str(status0.get("endpointProtocol")))
+            check("status.endpointWarning=null",
+                  status0.get("endpointWarning") is None, str(status0.get("endpointWarning")))
+
+            bad_url = c.put("/api/bird/config", json={"endpoint": "ftp://not-http"})
+            check("PUT 非法 endpoint 400 INVALID_CONFIG", expect_error(bad_url, 400, "INVALID_CONFIG"), bad_url.text[:300])
+            base_only = c.put("/api/bird/config", json={"endpoint": "https://ark.example.com/api/v3"})
+            check("PUT 只填 Base URL（缺少 /chat/completions 或 /responses）400 INVALID_CONFIG",
+                  expect_error(base_only, 400, "INVALID_CONFIG"), base_only.text[:300])
+            bad_mock = c.put("/api/bird/config", json={"mock": "yes"})
+            check("PUT mock 非布尔值 400 INVALID_CONFIG", expect_error(bad_mock, 400, "INVALID_CONFIG"), bad_mock.text[:300])
+
+            saved = c.put("/api/bird/config",
+                          json={"endpoint": "https://ark.example.com/api/v3/responses/", "model": "doubao-e2e-model"})
+            check("PUT 保存 endpoint/model 200", saved.status_code == 200, saved.text[:300])
+            saved_status = saved.json()
+            check("保存后 endpoint 去掉尾部斜杠",
+                  saved_status.get("endpoint") == "https://ark.example.com/api/v3/responses",
+                  str(saved_status.get("endpoint")))
+            check("保存后 endpointProtocol=responses",
+                  saved_status.get("endpointProtocol") == "responses", str(saved_status.get("endpointProtocol")))
+            check("保存后 status 生效（model=自定义）", saved_status.get("model") == "doubao-e2e-model",
+                  str(saved_status.get("model")))
+            check("GET status 与保存值一致",
+                  c.get("/api/bird/status").json().get("model") == "doubao-e2e-model")
+
+            full_key = "ark-e2e-test-1234567890abcdef"
+            with_key = c.put("/api/bird/config", json={"apiKey": full_key})
+            key_status = with_key.json()
+            check("PUT 保存 apiKey 200 且 keySource=config",
+                  with_key.status_code == 200 and key_status.get("keySource") == "config", with_key.text[:300])
+            check("响应不回传明文 Key", full_key not in with_key.text, with_key.text[:300])
+            check("Key 掩码保留首尾（ark-…cdef）",
+                  str(key_status.get("keyMasked", "")).startswith("ark-") and str(key_status.get("keyMasked", "")).endswith("cdef"),
+                  str(key_status.get("keyMasked")))
+
+            cleared_key = c.put("/api/bird/config", json={"apiKey": ""}).json()
+            check("PUT apiKey 空字符串清空 Key",
+                  cleared_key.get("keyMasked") is None and cleared_key.get("keySource") == "mock",
+                  json.dumps(cleared_key)[:300])
+            defaults = c.put("/api/bird/config", json={"endpoint": "", "model": ""}).json()
+            check("PUT 清空 endpoint/model 恢复默认值",
+                  defaults.get("endpoint") == "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+                  and defaults.get("model") == "doubao-seed-2-1-lite",
+                  json.dumps(defaults)[:300])
+
+            verify = c.post("/api/bird/verify")
+            verify_body = verify.json()
+            check("POST /api/bird/verify 200 且 ok=true（mock）",
+                  verify.status_code == 200 and verify_body.get("ok") is True, verify.text[:300])
+            check("verify 消息为模拟模式", "模拟模式" in str(verify_body.get("message")), str(verify_body.get("message")))
+            check("verify 返回默认模型",
+                  verify_body.get("model") == "doubao-seed-2-1-lite", str(verify_body.get("model")))
+
+            print("\n[15] AI 识鸟：提交任务与右侧队列")
+            bcreated = c.post("/api/sessions",
+                              json={"source": "server", "directory": str(bird_dir), "recursive": True})
+            check("识鸟用 server 会话 201", bcreated.status_code == 201, bcreated.text[:300])
+            bsession = bcreated.json()
+            bsid = bsession["id"]
+            check("识鸟会话库总数正确", bsession["libraryTotal"] == len(expected),
+                  f"{bsession['libraryTotal']} vs {len(expected)}")
+            check("识鸟会话初始 birdIdentifiedCount=0", bsession.get("birdIdentifiedCount") == 0,
+                  str(bsession.get("birdIdentifiedCount")))
+            bpage = c.get(f"/api/sessions/{bsid}/rounds/1/photos", params={"limit": 1000}).json()
+            bphotos = bpage["photos"]
+            check("识鸟会话照片列表完整", len(bphotos) == len(expected))
+
+            t1_resp = c.post(f"/api/sessions/{bsid}/bird-tasks", json={"photoId": bphotos[0]["id"]})
+            check("POST bird-tasks 201", t1_resp.status_code == 201, t1_resp.text[:300])
+            task1 = t1_resp.json()
+            check("任务初始状态为 queued/running", task1.get("status") in ("queued", "running"),
+                  str(task1.get("status")))
+            required_task_fields = {
+                "id", "sessionId", "photoId", "photoName", "photoRelativePath", "thumbnailUrl",
+                "status", "stage", "progress", "queuePosition", "createdAt", "startedAt", "finishedAt",
+                "elapsedMs", "model", "result", "error", "adopted", "referenceAvailable", "referenceUrl",
+            }
+            check("BirdTask 字段完整", required_task_fields <= set(task1), json.dumps(sorted(task1))[:400])
+            check("任务 photoId/photoName 正确",
+                  task1.get("photoId") == bphotos[0]["id"] and task1.get("photoName") == bphotos[0]["name"],
+                  json.dumps({k: task1.get(k) for k in ("photoId", "photoName")}))
+            check("任务使用默认模型", task1.get("model") == "doubao-seed-2-1-lite", str(task1.get("model")))
+
+            t2_resp = c.post(f"/api/sessions/{bsid}/bird-tasks", json={"photoId": bphotos[1]["id"]})
+            check("提交第二个任务 201", t2_resp.status_code == 201, t2_resp.text[:300])
+            task2 = t2_resp.json()
+            check("第二个任务排队中且 queuePosition 有效",
+                  task2.get("status") == "queued" and task2.get("queuePosition") in (1, 2),
+                  json.dumps({k: task2.get(k) for k in ("status", "queuePosition")}))
+            dup_resp = c.post(f"/api/sessions/{bsid}/bird-tasks", json={"photoId": bphotos[1]["id"]})
+            check("重复提交同照片复用同一 task id",
+                  dup_resp.status_code == 201 and dup_resp.json().get("id") == task2.get("id"), dup_resp.text[:300])
+
+            listed = c.get(f"/api/sessions/{bsid}/bird-tasks").json()
+            check("GET bird-tasks 返回 2 个任务", len(listed.get("tasks", [])) == 2,
+                  json.dumps([t.get("status") for t in listed.get("tasks", [])]))
+            listed_counts = {
+                "queued": sum(1 for t in listed["tasks"] if t["status"] == "queued"),
+                "running": sum(1 for t in listed["tasks"] if t["status"] == "running"),
+            }
+            check("队列计数与任务状态一致", listed.get("queue") == listed_counts,
+                  json.dumps({"queue": listed.get("queue"), "counts": listed_counts}))
+            order_priority = [{"running": 0, "queued": 1}.get(t["status"], 2) for t in listed["tasks"]]
+            check("任务列表排序：running 在 queued 之前", order_priority == sorted(order_priority),
+                  json.dumps([t["status"] for t in listed["tasks"]]))
+            status_queue = c.get("/api/bird/status").json().get("queue")
+            check("/api/bird/status queue 与任务列表一致", status_queue == listed_counts,
+                  json.dumps({"status": status_queue, "list": listed_counts}))
+
+            print("\n[16] AI 识鸟：轮询完成与参考照片")
+            task1_done = poll_task(bsid, task1["id"])
+            check("轮询单任务到 completed", task1_done.get("status") == "completed", json.dumps(task1_done)[:400])
+            check("完成后 stage=done", task1_done.get("stage") == "done", str(task1_done.get("stage")))
+            check("完成后 progress=100", task1_done.get("progress") == 100, str(task1_done.get("progress")))
+            result1 = task1_done.get("result") or {}
+            check("result.identified=true（mock 确定性结果）", result1.get("identified") is True, json.dumps(result1)[:300])
+            check("result.species 非空", bool(str(result1.get("species", "")).strip()), str(result1.get("species")))
+            check("result 含科/属/拉丁名",
+                  all(str(result1.get(key, "")).strip() for key in ("family", "genus", "speciesLatin")),
+                  json.dumps({k: result1.get(k) for k in ("family", "genus", "speciesLatin")}))
+            confidence = result1.get("confidence")
+            check("confidence 在 0-1 之间",
+                  isinstance(confidence, (int, float)) and 0 <= confidence <= 1, str(confidence))
+            check("mock 结果带模拟标注",
+                  "模拟识别结果" in str(result1.get("note", "")) and result1.get("referenceSource") == "Mock Reference",
+                  json.dumps({k: result1.get(k) for k in ("note", "referenceSource")}))
+            check("referenceAvailable=true 且 referenceUrl 指向 reference 接口",
+                  task1_done.get("referenceAvailable") is True
+                  and str(task1_done.get("referenceUrl", "")).endswith("/reference"),
+                  json.dumps({k: task1_done.get(k) for k in ("referenceAvailable", "referenceUrl")}))
+            check("finishedAt 有值且 elapsedMs>0",
+                  bool(task1_done.get("finishedAt")) and (task1_done.get("elapsedMs") or 0) > 0,
+                  json.dumps({k: task1_done.get(k) for k in ("finishedAt", "elapsedMs")}))
+
+            ref_resp = c.get(f"/api/sessions/{bsid}/bird-tasks/{task1['id']}/reference")
+            check("GET 参考照片 200", ref_resp.status_code == 200, ref_resp.text[:200])
+            check("参考照片 content-type=image/jpeg",
+                  ref_resp.headers.get("content-type", "").startswith("image/jpeg"),
+                  str(ref_resp.headers.get("content-type")))
+            check("参考照片字节数 > 1000", len(ref_resp.content) > 1000, str(len(ref_resp.content)))
+            check("参考照片 Cache-Control: no-store",
+                  "no-store" in ref_resp.headers.get("cache-control", "").lower(),
+                  str(ref_resp.headers.get("cache-control")))
+            check("参考照片是 JPEG 数据", ref_resp.content[:2] == b"\xff\xd8", str(ref_resp.content[:8]))
+
+            print("\n[17] AI 识鸟：采纳 → 写 EXIF（图像数据不变）→ 写入会话")
+            from PIL import Image as _PILImage
+
+            photo1_path = bird_dir / Path(bphotos[0]["relativePath"])
+            before_bytes = photo1_path.read_bytes()
+            tail_before = jpeg_tail(before_bytes)
+            with io.BytesIO(before_bytes) as buffer:
+                size_before = _PILImage.open(buffer).size
+            check("采纳前照片图像数据可定位（SOS）", len(tail_before) > 1000, str(len(tail_before)))
+
+            adopt_resp = c.post(f"/api/sessions/{bsid}/bird-tasks/{task1['id']}/adopt")
+            check("POST adopt 200", adopt_resp.status_code == 200, adopt_resp.text[:400])
+            adopt_body = adopt_resp.json()
+            check("采纳后任务 status=adopted", (adopt_body.get("task") or {}).get("status") == "adopted",
+                  str((adopt_body.get("task") or {}).get("status")))
+            observation = adopt_body.get("observation") or {}
+            check("observation.species 与识别结果一致",
+                  observation.get("species") == result1.get("species"),
+                  json.dumps({"obs": observation.get("species"), "result": result1.get("species")}, ensure_ascii=False))
+            check("observation 含科/属/拉丁名/模型/采纳时间",
+                  all(bool(str(observation.get(key, "")).strip()) for key in
+                      ("family", "genus", "speciesLatin", "model", "adoptedAt")),
+                  json.dumps(observation, ensure_ascii=False)[:400])
+            exif_out = adopt_body.get("exif") or {}
+            check("exif.written=true 且 path 指向该照片",
+                  exif_out.get("written") is True and Path(str(exif_out.get("path", ""))).name == photo1_path.name,
+                  json.dumps(exif_out, ensure_ascii=False)[:300])
+            check("exif.error 为空", exif_out.get("error") is None, str(exif_out.get("error")))
+
+            species = str(result1.get("species", ""))
+            species_latin = str(result1.get("speciesLatin", ""))
+            family = str(result1.get("family", ""))
+            genus = str(result1.get("genus", ""))
+            model_name = str(result1.get("model") or task1_done.get("model") or "")
+            with _PILImage.open(photo1_path) as image:
+                exif = image.getexif()
+                size_after = image.size
+                description = str(exif.get(0x010E) or "")
+                title = xp_text(exif, 0x9C9B)
+                keywords = xp_text(exif, 0x9C9E)
+                subject = xp_text(exif, 0x9C9F)
+                comment = xp_text(exif, 0x9C9C)
+            check("EXIF ImageDescription(0x010E) 含拉丁学名",
+                  species_latin in description and "Bird:" in description, description[:200])
+            check("EXIF XPTitle(0x9C9B) 含中文种名与拉丁名",
+                  species in title and species_latin in title, title[:200])
+            check("EXIF XPKeywords(0x9C9E) 含「鸟类」与种名",
+                  "鸟类" in keywords and species in keywords, keywords[:200])
+            check("EXIF XPSubject(0x9C9F) 含科/属/种",
+                  family in subject and genus in subject and species in subject, subject[:200])
+            check("EXIF XPComment(0x9C9C) 含模型名与置信度",
+                  model_name in comment and "%" in comment, comment[:200])
+            after_bytes = photo1_path.read_bytes()
+            check("照片图像数据（SOS 之后）逐字节未变",
+                  jpeg_tail(after_bytes) == tail_before,
+                  f"{len(jpeg_tail(after_bytes))} vs {len(tail_before)}")
+            check("照片尺寸未变（未重编码）", size_after == size_before, f"{size_before} -> {size_after}")
+
+            adopt_again = c.post(f"/api/sessions/{bsid}/bird-tasks/{task1['id']}/adopt")
+            check("已 adopted 任务再次 adopt 幂等更新",
+                  adopt_again.status_code == 200 and (adopt_again.json().get("task") or {}).get("status") == "adopted",
+                  adopt_again.text[:400])
+
+            adopted_round_photos = c.get(f"/api/sessions/{bsid}/rounds/1/photos",
+                                         params={"limit": 1000}).json()["photos"]
+            adopted_photo = next(p for p in adopted_round_photos if p["id"] == bphotos[0]["id"])
+            check("采纳后 rounds/1/photos 对应 photo.bird 非空",
+                  isinstance(adopted_photo.get("bird"), dict), json.dumps(adopted_photo.get("bird"), ensure_ascii=False)[:300])
+            check("photo.bird.species 与采纳结果一致",
+                  (adopted_photo.get("bird") or {}).get("species") == species,
+                  json.dumps(adopted_photo.get("bird"), ensure_ascii=False)[:300])
+            session_after_adopt = c.get(f"/api/sessions/{bsid}").json()
+            check("会话 birdIdentifiedCount=1", session_after_adopt.get("birdIdentifiedCount") == 1,
+                  str(session_after_adopt.get("birdIdentifiedCount")))
+
+            print("\n[18] AI 识鸟：忽略 / 未完成 / 已采纳等错误分支")
+            task2_done = poll_task(bsid, task2["id"])
+            check("第二个任务最终 completed", task2_done.get("status") == "completed", str(task2_done.get("status")))
+            dismiss2 = c.post(f"/api/sessions/{bsid}/bird-tasks/{task2['id']}/dismiss")
+            check("dismiss 200 且状态 dismissed",
+                  dismiss2.status_code == 200 and dismiss2.json().get("status") == "dismissed", dismiss2.text[:300])
+            dismiss2_again = c.post(f"/api/sessions/{bsid}/bird-tasks/{task2['id']}/dismiss")
+            check("dismiss 幂等（已 dismissed 再 dismiss 200）",
+                  dismiss2_again.status_code == 200 and dismiss2_again.json().get("status") == "dismissed",
+                  dismiss2_again.text[:300])
+            adopt_dismissed = c.post(f"/api/sessions/{bsid}/bird-tasks/{task2['id']}/adopt")
+            check("对 dismissed 任务 adopt 409 BIRD_TASK_NOT_COMPLETED",
+                  expect_error(adopt_dismissed, 409, "BIRD_TASK_NOT_COMPLETED"), adopt_dismissed.text[:300])
+            dismiss_adopted = c.post(f"/api/sessions/{bsid}/bird-tasks/{task1['id']}/dismiss")
+            check("对 adopted 任务 dismiss 409 BIRD_TASK_ADOPTED",
+                  expect_error(dismiss_adopted, 409, "BIRD_TASK_ADOPTED"), dismiss_adopted.text[:300])
+
+            t3 = c.post(f"/api/sessions/{bsid}/bird-tasks", json={"photoId": bphotos[2]["id"]}).json()
+            t4 = c.post(f"/api/sessions/{bsid}/bird-tasks", json={"photoId": bphotos[3]["id"]}).json()
+            queued_adopt = c.post(f"/api/sessions/{bsid}/bird-tasks/{t4['id']}/adopt")
+            check("任务未完成时 adopt 409 BIRD_TASK_NOT_COMPLETED",
+                  expect_error(queued_adopt, 409, "BIRD_TASK_NOT_COMPLETED"), queued_adopt.text[:300])
+            queued_ref = c.get(f"/api/sessions/{bsid}/bird-tasks/{t4['id']}/reference")
+            check("未完成任务获取参考照片 404 BIRD_REFERENCE_UNAVAILABLE",
+                  expect_error(queued_ref, 404, "BIRD_REFERENCE_UNAVAILABLE"), queued_ref.text[:300])
+            c.post(f"/api/sessions/{bsid}/bird-tasks/{t3['id']}/dismiss")
+            c.post(f"/api/sessions/{bsid}/bird-tasks/{t4['id']}/dismiss")
+
+            unknown_task = c.get(f"/api/sessions/{bsid}/bird-tasks/deadbeefdeadbeef")
+            check("未知任务 404 BIRD_TASK_NOT_FOUND",
+                  expect_error(unknown_task, 404, "BIRD_TASK_NOT_FOUND"), unknown_task.text[:300])
+            unknown_adopt = c.post(f"/api/sessions/{bsid}/bird-tasks/deadbeefdeadbeef/adopt")
+            check("采纳未知任务 404 BIRD_TASK_NOT_FOUND",
+                  expect_error(unknown_adopt, 404, "BIRD_TASK_NOT_FOUND"), unknown_adopt.text[:300])
+            unknown_session_tasks = c.get("/api/sessions/nosuchsession/bird-tasks")
+            check("未知会话任务列表 404 SESSION_NOT_FOUND",
+                  expect_error(unknown_session_tasks, 404, "SESSION_NOT_FOUND"), unknown_session_tasks.text[:300])
+            bad_photo_submit = c.post(f"/api/sessions/{bsid}/bird-tasks", json={"photoId": "deadbeefdeadbeef"})
+            check("提交不存在的照片 404 PHOTO_NOT_FOUND",
+                  expect_error(bad_photo_submit, 404, "PHOTO_NOT_FOUND"), bad_photo_submit.text[:300])
+
+            browser_bird = c.post("/api/sessions", json={
+                "source": "browser", "label": "识鸟不支持", "recursive": True,
+                "photos": [{"relativePath": "a.jpg", "sizeBytes": 1}],
+            }).json()
+            browser_bird_photo = c.get(f"/api/sessions/{browser_bird['id']}/rounds/1/photos").json()["photos"][0]
+            browser_submit = c.post(f"/api/sessions/{browser_bird['id']}/bird-tasks",
+                                    json={"photoId": browser_bird_photo["id"]})
+            check("browser 来源会话提交识鸟 400 INVALID_SOURCE",
+                  expect_error(browser_submit, 400, "INVALID_SOURCE"), browser_submit.text[:300])
+
+            # mock 失败/无鸟路径：文件名含 notbird → identified=false（契约 §9）
+            notbird_dir = out_dir / "bird-notbird"
+            if notbird_dir.exists():
+                shutil.rmtree(notbird_dir)
+            notbird_dir.mkdir(parents=True)
+            shutil.copyfile(bird_dir / Path(bphotos[0]["relativePath"]), notbird_dir / "notbird.jpg")
+            notbird_session = c.post("/api/sessions",
+                                     json={"source": "server", "directory": str(notbird_dir),
+                                           "recursive": True}).json()
+            notbird_photo = c.get(f"/api/sessions/{notbird_session['id']}/rounds/1/photos").json()["photos"][0]
+            notbird_task = c.post(f"/api/sessions/{notbird_session['id']}/bird-tasks",
+                                  json={"photoId": notbird_photo["id"]})
+            check("notbird 照片提交识鸟 201", notbird_task.status_code == 201, notbird_task.text[:300])
+            notbird_done = poll_task(notbird_session["id"], notbird_task.json()["id"])
+            check("mock 文件名含 notbird → 任务 completed 但 identified=false",
+                  notbird_done.get("status") == "completed"
+                  and (notbird_done.get("result") or {}).get("identified") is False,
+                  json.dumps(notbird_done, ensure_ascii=False)[:400])
+            check("无鸟结果 reason 非空且无参考照片",
+                  bool(str((notbird_done.get("result") or {}).get("reason", "")).strip())
+                  and notbird_done.get("referenceAvailable") is False,
+                  json.dumps(notbird_done, ensure_ascii=False)[:400])
+            notbird_adopt = c.post(f"/api/sessions/{notbird_session['id']}"
+                                   f"/bird-tasks/{notbird_done.get('id')}/adopt")
+            check("无鸟结果采纳 409 BIRD_RESULT_UNAVAILABLE",
+                  expect_error(notbird_adopt, 409, "BIRD_RESULT_UNAVAILABLE"), notbird_adopt.text[:300])
+            notbird_ref = c.get(f"/api/sessions/{notbird_session['id']}"
+                                f"/bird-tasks/{notbird_done.get('id')}/reference")
+            check("无鸟结果参考照片 404 BIRD_REFERENCE_UNAVAILABLE",
+                  expect_error(notbird_ref, 404, "BIRD_REFERENCE_UNAVAILABLE"), notbird_ref.text[:300])
+            notbird_dismiss = c.post(f"/api/sessions/{notbird_session['id']}"
+                                     f"/bird-tasks/{notbird_done.get('id')}/dismiss")
+            check("无鸟任务可忽略", notbird_dismiss.status_code == 200
+                  and notbird_dismiss.json().get("status") == "dismissed", notbird_dismiss.text[:300])
+            c.post(f"/api/sessions/{notbird_session['id']}/finish")
+            notbird_result = c.get(f"/api/sessions/{notbird_session['id']}/result").json()
+            check("无鸟会话结果 birdIdentifiedCount=0 且 photos[].bird 为空",
+                  notbird_result.get("birdIdentifiedCount") == 0
+                  and all(p.get("bird") is None for p in notbird_result["photos"]),
+                  json.dumps(notbird_result.get("birdIdentifiedCount")))
+
+            print("\n[19] AI 识鸟：结束结果 JSON / restore 保留 bird")
+            bfin = c.post(f"/api/sessions/{bsid}/finish")
+            check("识鸟会话 finish 200", bfin.status_code == 200, bfin.text[:300])
+            bres = bfin.json()["result"]
+            check("结果 JSON birdIdentifiedCount=1", bres.get("birdIdentifiedCount") == 1,
+                  str(bres.get("birdIdentifiedCount")))
+            check("结果 schemaVersion 仍为 1", bres.get("schemaVersion") == 1, str(bres.get("schemaVersion")))
+            result_by_id = {p["id"]: p for p in bres["photos"]}
+            check("结果 JSON 已采纳照片 photos[].bird 非空",
+                  isinstance(result_by_id[bphotos[0]["id"]].get("bird"), dict),
+                  json.dumps(result_by_id[bphotos[0]["id"]].get("bird"), ensure_ascii=False)[:300])
+            check("结果 JSON 照片 bird.species 正确",
+                  (result_by_id[bphotos[0]["id"]].get("bird") or {}).get("species") == species,
+                  json.dumps(result_by_id[bphotos[0]["id"]].get("bird"), ensure_ascii=False)[:300])
+            check("结果 JSON 未识别照片 bird 为 null",
+                  all(p.get("bird") is None for pid, p in result_by_id.items() if pid != bphotos[0]["id"]),
+                  "存在非已采纳照片带 bird")
+            finished_submit = c.post(f"/api/sessions/{bsid}/bird-tasks", json={"photoId": bphotos[4]["id"]})
+            check("会话结束后提交识鸟 409 PHASE_FINISHED",
+                  expect_error(finished_submit, 409, "PHASE_FINISHED"), finished_submit.text[:300])
+
+            restored_bird = c.post("/api/sessions/restore", json=bres)
+            check("带 bird 的结果 JSON restore 201", restored_bird.status_code == 201, restored_bird.text[:300])
+            if restored_bird.status_code == 201:
+                rbid = restored_bird.json()["id"]
+                rs_photos = c.get(f"/api/sessions/{rbid}/rounds/1/photos",
+                                  params={"limit": 1000}).json()["photos"]
+                rs_photo = next(p for p in rs_photos if p["id"] == bphotos[0]["id"])
+                check("restore 后 PhotoItem.bird 仍存在",
+                      isinstance(rs_photo.get("bird"), dict), json.dumps(rs_photo.get("bird"), ensure_ascii=False)[:300])
+                check("restore 后 birdIdentifiedCount=1",
+                      c.get(f"/api/sessions/{rbid}").json().get("birdIdentifiedCount") == 1)
+                rs_result = c.get(f"/api/sessions/{rbid}/result").json()
+                rs_by_id = {p["id"]: p for p in rs_result["photos"]}
+                check("restore 后结果 JSON bird 保留",
+                      isinstance(rs_by_id[bphotos[0]["id"]].get("bird"), dict)
+                      and rs_result.get("birdIdentifiedCount") == 1,
+                      json.dumps(rs_by_id[bphotos[0]["id"]].get("bird"), ensure_ascii=False)[:300])
+        finally:
+            reset_cfg = c.put("/api/bird/config",
+                              json={"apiKey": None, "endpoint": None, "model": None, "mock": None})
+            reset_status = reset_cfg.json() if reset_cfg.status_code == 200 else {}
+            check("章节结束恢复 mock 配置（Key 已清空、默认模型、mock 生效）",
+                  reset_cfg.status_code == 200 and reset_status.get("mock") is True
+                  and reset_status.get("keyMasked") is None
+                  and reset_status.get("model") == "doubao-seed-2-1-lite",
+                  reset_cfg.text[:300])
 
     print(f"\n===== E2E 结果: PASS={PASS} FAIL={FAIL} =====")
     return 0 if FAIL == 0 else 1

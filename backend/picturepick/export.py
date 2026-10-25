@@ -78,6 +78,7 @@ def build_result(session: "Session") -> PickResult:
                 absolutePath=photo.absolute_path,
                 pickCount=session.pick_count(photo.id),
                 pickedInRounds=session.picked_in_rounds(photo.id),
+                bird=session.bird_observation(photo.id),
             )
         )
     photos.sort(key=lambda item: (-item.pickCount, item.relativePath))
@@ -90,6 +91,7 @@ def build_result(session: "Session") -> PickResult:
         totalPhotos=len(photos),
         roundsPlayed=len(session.rounds),
         pickedPhotoCount=sum(1 for item in photos if item.pickCount > 0),
+        birdIdentifiedCount=session.bird_identified_count,
         lastRound=build_last_round(session),
         photos=photos,
     )

@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, api
+from .birdid import BirdService
 from .errors import ApiError
 from .session import SessionStore
 
@@ -102,8 +103,9 @@ def _install_webui(app: FastAPI, webui_dir: Path) -> None:
 def create_app(
     webui_dir: Optional[Union[str, Path]] = None,
     store: Optional[SessionStore] = None,
+    bird_service: Optional[BirdService] = None,
 ) -> FastAPI:
-    """创建 FastAPI 应用（测试可注入 webui 目录与会话仓库）。"""
+    """创建 FastAPI 应用（测试可注入 webui 目录、会话仓库与识鸟服务）。"""
     app = FastAPI(
         title="PicturePick",
         version=__version__,
@@ -112,6 +114,8 @@ def create_app(
         openapi_url="/api/openapi.json",
     )
     app.state.store = store if store is not None else SessionStore()
+    #: AI 识鸟服务：后台任务队列 + 配置 + EXIF 写入（docs/BIRDID-CONTRACT.md）
+    app.state.bird = bird_service if bird_service is not None else BirdService(app.state.store)
     app.state.webui_dir = Path(webui_dir) if webui_dir is not None else default_webui_dir()
 
     app.add_middleware(

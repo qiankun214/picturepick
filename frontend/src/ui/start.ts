@@ -7,6 +7,7 @@
  */
 import { errorText } from '../api';
 import { icon, qs } from './dom';
+import { openBirdSettingsModal } from './bird/settings';
 import { showToast } from './toast';
 
 export interface StartViewOptions {
@@ -60,6 +61,15 @@ export function mountStartView(root: HTMLElement, options: StartViewOptions): vo
               tabindex="-1"
             />
             <p class="restore-hint">载入之前保存的结果 JSON，可查看结果、重新导出，或继续筛选。</p>
+          </div>
+
+          <div class="start-bird-row">
+            <button type="button" class="btn btn--ghost bird-settings-button" data-testid="bird-settings-button">
+              ${icon('bird')}<span>AI 识鸟设置</span>
+            </button>
+            <p class="start-bird-hint">
+              可选：填写火山方舟 API Key 后，在选片页按 <kbd>B</kbd> 识别鸟种（识别时照片会上传到方舟服务）。
+            </p>
           </div>
 
           <p class="privacy-note">
@@ -169,6 +179,10 @@ export function mountStartView(root: HTMLElement, options: StartViewOptions): vo
     const file = restoreInput.files?.[0];
     restoreInput.value = '';
     if (file) void restoreFromFile(file);
+  });
+
+  qs<HTMLButtonElement>(root, '[data-testid="bird-settings-button"]').addEventListener('click', () => {
+    openBirdSettingsModal();
   });
 
   pickButton.focus({ preventScroll: true });

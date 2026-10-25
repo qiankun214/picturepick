@@ -52,6 +52,149 @@ class DialogResult(BaseModel):
     cancelled: bool
 
 
+# ---- AI 识鸟（第 5 版） ----------------------------------------------------
+
+
+class BirdAlternative(BaseModel):
+    """备选识别结果（最多 3 条）。"""
+
+    species: str = ""
+    speciesLatin: str = ""
+    confidence: Optional[float] = None
+
+
+class BirdResult(BaseModel):
+    """模型识别结果（任务完成后的原始结构化结果）。"""
+
+    identified: bool = False
+    family: str = ""
+    familyLatin: str = ""
+    genus: str = ""
+    genusLatin: str = ""
+    species: str = ""
+    speciesLatin: str = ""
+    commonNameEn: str = ""
+    confidence: Optional[float] = None
+    note: str = ""
+    #: identified=false 时的原因
+    reason: str = ""
+    alternatives: List[BirdAlternative] = Field(default_factory=list)
+    referenceSource: str = ""
+    referenceNote: str = ""
+
+
+class BirdObservation(BaseModel):
+    """已采纳的鸟类识别（写入会话 / PhotoItem / 结果 JSON）。"""
+
+    family: str = ""
+    familyLatin: str = ""
+    genus: str = ""
+    genusLatin: str = ""
+    species: str = ""
+    speciesLatin: str = ""
+    commonNameEn: str = ""
+    confidence: Optional[float] = None
+    note: str = ""
+    referenceSource: str = ""
+    model: str = ""
+    adoptedAt: str = ""
+    exifWritten: bool = False
+    exifError: Optional[str] = None
+
+
+class BirdTaskError(BaseModel):
+    code: str
+    message: str
+
+
+class BirdTask(BaseModel):
+    """AI 识鸟后台任务（队列 / 进度 / 结果）。"""
+
+    id: str
+    sessionId: str
+    photoId: str
+    photoName: str
+    photoRelativePath: str
+    thumbnailUrl: str
+    status: str = "queued"
+    stage: str = "queued"
+    progress: int = 0
+    queuePosition: Optional[int] = None
+    createdAt: str
+    startedAt: Optional[str] = None
+    finishedAt: Optional[str] = None
+    elapsedMs: int = 0
+    model: str = ""
+    result: Optional[BirdResult] = None
+    error: Optional[BirdTaskError] = None
+    adopted: bool = False
+    referenceAvailable: bool = False
+    referenceUrl: Optional[str] = None
+
+
+class BirdQueueInfo(BaseModel):
+    queued: int = 0
+    running: int = 0
+
+
+class BirdTaskCreateRequest(BaseModel):
+    photoId: str
+
+
+class BirdTaskListResponse(BaseModel):
+    tasks: List[BirdTask] = Field(default_factory=list)
+    queue: BirdQueueInfo = Field(default_factory=BirdQueueInfo)
+
+
+class BirdStatusResponse(BaseModel):
+    configured: bool = False
+    model: str = ""
+    #: 完整 API 端点 URL（后端原样 POST，不做路径拼接）
+    endpoint: str = ""
+    #: 端点协议：chat（Chat Completions）/ responses（Responses API）/ null（不支持）
+    endpointProtocol: Optional[str] = None
+    #: 端点不是受支持的完整接口 URL 时的提示（提交任务会返回 400 INVALID_CONFIG）
+    endpointWarning: Optional[str] = None
+    keyMasked: Optional[str] = None
+    keySource: Optional[str] = None
+    mock: bool = False
+    queue: BirdQueueInfo = Field(default_factory=BirdQueueInfo)
+
+
+class BirdConfigRequest(BaseModel):
+    """PUT /api/bird/config：字段缺省 = 保持；null / 空字符串 = 清除。
+
+    端点为**完整接口 URL**（以 ``/chat/completions`` 或 ``/responses`` 结尾），
+    后端直接向它发请求，不做任何隐藏拼接。
+    ``mock`` 使用 ``Any``，由 config.update_config 做严格的布尔校验
+    （pydantic 1.x 的 bool 会把 "yes"/"on" 等字符串静默转成 True，不符合契约）。
+    """
+
+    apiKey: Optional[str] = None
+    endpoint: Optional[str] = None
+    model: Optional[str] = None
+    mock: Any = None
+
+
+class BirdVerifyResponse(BaseModel):
+    ok: bool
+    message: str
+    latencyMs: Optional[int] = None
+    model: str = ""
+
+
+class BirdExifOutcome(BaseModel):
+    written: bool
+    path: str = ""
+    error: Optional[str] = None
+
+
+class BirdAdoptResponse(BaseModel):
+    task: BirdTask
+    observation: BirdObservation
+    exif: BirdExifOutcome
+
+
 # ---- 会话 ------------------------------------------------------------------
 
 
@@ -78,6 +221,8 @@ class SessionSummary(BaseModel):
     roundPhotoCount: int
     viewedCount: int
     pickCount: int
+    #: 本会话已采纳 AI 识鸟的照片数（第 5 版）
+    birdIdentifiedCount: int = 0
     rounds: List[RoundSummary] = Field(default_factory=list)
 
 
@@ -89,6 +234,8 @@ class PhotoItem(BaseModel):
     pickCount: int
     picked: bool
     viewed: bool
+    #: 已采纳的鸟类识别（未识别为 None，第 5 版）
+    bird: Optional[BirdObservation] = None
 
 
 class PhotoListResponse(BaseModel):
@@ -130,6 +277,8 @@ class PickResultPhoto(BaseModel):
     absolutePath: str
     pickCount: int
     pickedInRounds: List[int] = Field(default_factory=list)
+    #: 已采纳的鸟类识别（未识别为 None，第 5 版）
+    bird: Optional[BirdObservation] = None
 
 
 class LastRound(BaseModel):
@@ -149,6 +298,8 @@ class PickResult(BaseModel):
     totalPhotos: int
     roundsPlayed: int
     pickedPhotoCount: int
+    #: 已采纳 AI 识鸟的照片数（第 5 版）
+    birdIdentifiedCount: int = 0
     lastRound: LastRound
     photos: List[PickResultPhoto] = Field(default_factory=list)
 

@@ -39,6 +39,34 @@ def disable_native_dialog(monkeypatch):
     monkeypatch.setenv("PICTUREPICK_DISABLE_DIALOG", "1")
 
 
+_BIRD_ENV_VARS = (
+    "PICTUREPICK_ARK_API_KEY",
+    "ARK_API_KEY",
+    "PICTUREPICK_ARK_ENDPOINT",
+    "PICTUREPICK_ARK_BASE_URL",
+    "PICTUREPICK_ARK_MODEL",
+    "PICTUREPICK_BIRD_MOCK",
+    "PICTUREPICK_BIRD_MOCK_DELAY",
+    "PICTUREPICK_BIRD_MOCK_FAIL",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_bird_config(tmp_path, monkeypatch):
+    """AI 识鸟配置隔离：不读真实用户配置、不受外部环境变量影响。"""
+    monkeypatch.setenv("PICTUREPICK_CONFIG_DIR", str(tmp_path / "picturepick-config"))
+    for name in _BIRD_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def mock_bird(monkeypatch):
+    """启用模拟识鸟（不访问网络，任务几乎立即完成）。"""
+    monkeypatch.setenv("PICTUREPICK_BIRD_MOCK", "1")
+    monkeypatch.setenv("PICTUREPICK_BIRD_MOCK_DELAY", "0")
+    return monkeypatch
+
+
 @pytest.fixture
 def library(tmp_path: Path) -> Path:
     """6 张照片（3 顶层 + 3 子目录，大小写混合）+ 3 个干扰文件。"""

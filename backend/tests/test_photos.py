@@ -48,6 +48,7 @@ def test_round_photos_pagination_and_fields(client, library):
             "pickCount",
             "picked",
             "viewed",
+            "bird",
         }
         assert photo["name"].lower().endswith((".jpg", ".jpeg"))
         assert photo["sizeBytes"] > 0

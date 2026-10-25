@@ -122,6 +122,7 @@ def test_browser_photo_items_do_not_include_images(client):
             "pickCount",
             "picked",
             "viewed",
+            "bird",
         }
         assert photo["id"] == browser_id(photo["relativePath"])
         assert photo["pickCount"] == 0

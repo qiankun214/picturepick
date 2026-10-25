@@ -2493,3 +2493,1371 @@ body:has(.picker) .toast-stack {
     scroll-behavior: auto !important;
   }
 }
+
+/* =====================================================================
+   AI 识鸟（docs/BIRDID-CONTRACT.md §8）
+   三栏工作区：左图片信息 / 中 viewer / 右任务队列；模态框、设置、结果页胶囊。
+   ===================================================================== */
+
+/* ------------------------------ 三栏工作区 ------------------------------ */
+
+.workspace {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace > .stage {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 顶部「AI 识鸟」按钮 + 设置图标 */
+.btn--bird {
+  height: 34px;
+  padding: 0 12px;
+  border-color: rgba(255, 191, 71, 0.38);
+  background: linear-gradient(180deg, rgba(255, 191, 71, 0.16), rgba(255, 191, 71, 0.06));
+  color: var(--accent);
+  font-size: 12.5px;
+}
+
+.btn--bird:hover:not(:disabled) {
+  border-color: rgba(255, 191, 71, 0.62);
+  background: linear-gradient(180deg, rgba(255, 191, 71, 0.24), rgba(255, 191, 71, 0.1));
+  color: var(--text);
+}
+
+.btn--bird .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.btn__kbd {
+  padding: 0 5px;
+  border: 1px solid rgba(255, 191, 71, 0.38);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.5;
+  opacity: 0.75;
+}
+
+/* ------------------------------ 左：图片信息栏 ------------------------------ */
+
+.photo-info {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: 244px;
+  min-width: 0;
+  overflow: hidden;
+  background: linear-gradient(180deg, #101318, #0b0d10);
+  border-right: 1px solid var(--line-soft);
+  transition: width 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.photo-info__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  height: 42px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.photo-info__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.photo-info__title .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-mute);
+}
+
+.photo-info__toggle {
+  flex: none;
+  width: 26px;
+  height: 26px;
+}
+
+.photo-info__toggle .icon {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.18s ease;
+}
+
+.photo-info__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.photo-info__section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.photo-info__filename {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.photo-info__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.photo-info__label {
+  flex: none;
+  width: 30px;
+  color: var(--text-mute);
+}
+
+.photo-info__value {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-dim);
+}
+
+.photo-info__value--mono {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.photo-info__empty {
+  color: var(--text-mute);
+  font-size: 12px;
+}
+
+/* 左栏折叠：收成图标条 */
+.picker.is-info-collapsed .photo-info {
+  width: 46px;
+}
+
+.picker.is-info-collapsed .photo-info__head {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  height: auto;
+  min-height: 74px;
+  padding: 10px 0;
+  gap: 8px;
+}
+
+.picker.is-info-collapsed .photo-info__title span {
+  display: none;
+}
+
+.picker.is-info-collapsed .photo-info__body {
+  display: none;
+}
+
+.picker.is-info-collapsed .photo-info__toggle .icon {
+  transform: rotate(180deg);
+}
+
+/* 左栏：鸟类识别块 */
+.bird-info {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 191, 71, 0.24);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255, 191, 71, 0.075), rgba(255, 191, 71, 0.015));
+}
+
+.bird-info--empty {
+  border-style: dashed;
+  border-color: var(--line);
+  background: var(--bg-2);
+}
+
+.bird-info__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.bird-info__head .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.bird-info__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.bird-info__badge--ai {
+  margin-left: auto;
+  border-color: rgba(255, 191, 71, 0.3);
+  background: rgba(255, 191, 71, 0.12);
+  color: var(--accent);
+}
+
+.bird-info__badge--ok {
+  border-color: rgba(95, 224, 143, 0.32);
+  background: rgba(95, 224, 143, 0.1);
+  color: var(--ok);
+}
+
+.bird-info__badge--warn {
+  border-color: rgba(255, 191, 71, 0.36);
+  background: rgba(255, 191, 71, 0.1);
+  color: var(--accent);
+}
+
+.bird-info__species {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.bird-info__taxa {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.bird-info__taxon {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.bird-info__taxon dt {
+  flex: none;
+  width: 20px;
+  color: var(--text-mute);
+}
+
+.bird-info__taxon dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-dim);
+}
+
+.bird-info__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.bird-info__dot {
+  color: #454e5c;
+}
+
+.bird-info__source {
+  overflow-wrap: anywhere;
+  color: var(--text-mute);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.bird-info__empty-text {
+  color: var(--text-mute);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+/* ------------------------------ 右：AI 识鸟队列 ------------------------------ */
+
+.bird-queue {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: 302px;
+  min-width: 0;
+  overflow: hidden;
+  background: linear-gradient(180deg, #101318, #0b0d10);
+  border-left: 1px solid var(--line-soft);
+  transition: width 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.bird-queue__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  height: 42px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bird-queue__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.bird-queue__title .icon {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+
+.bird-queue__count {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.bird-queue__count.is-idle {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-mute);
+}
+
+.bird-queue__toggle {
+  flex: none;
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+}
+
+.bird-queue__toggle .icon {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.18s ease;
+}
+
+.bird-queue__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.bird-queue__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 38px 14px;
+  color: var(--text-mute);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+.bird-queue__empty > .icon {
+  width: 28px;
+  height: 28px;
+  color: #3f4857;
+}
+
+.bird-queue__empty-title {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.bird-queue__empty-hint {
+  line-height: 1.6;
+}
+
+.bird-queue__empty-hint kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+
+.bird-queue__list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* 右栏折叠：收成图标条 */
+.picker.is-queue-collapsed .bird-queue {
+  width: 46px;
+}
+
+.picker.is-queue-collapsed .bird-queue__head {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  height: auto;
+  min-height: 96px;
+  padding: 10px 0;
+  gap: 7px;
+}
+
+.picker.is-queue-collapsed .bird-queue__title span {
+  display: none;
+}
+
+.picker.is-queue-collapsed .bird-queue__toggle {
+  margin-left: 0;
+}
+
+.picker.is-queue-collapsed .bird-queue__toggle .icon {
+  transform: rotate(180deg);
+}
+
+.picker.is-queue-collapsed .bird-queue__body {
+  display: none;
+}
+
+/* 队列卡片 */
+.bird-task {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--bg-1);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease,
+    transform 0.12s ease;
+}
+
+.bird-task:hover {
+  border-color: var(--line);
+  background: var(--bg-2);
+}
+
+.bird-task:active {
+  transform: scale(0.995);
+}
+
+.bird-task[data-status='running'] {
+  border-color: rgba(255, 191, 71, 0.34);
+}
+
+.bird-task[data-status='completed'] {
+  border-color: rgba(255, 191, 71, 0.2);
+}
+
+.bird-task[data-status='adopted'] {
+  border-color: rgba(95, 224, 143, 0.24);
+}
+
+.bird-task[data-status='failed'] {
+  border-color: rgba(255, 122, 122, 0.24);
+}
+
+.bird-task__thumb {
+  flex: none;
+  width: 46px;
+  height: 46px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: #15181d;
+}
+
+.bird-task__thumb.is-missing {
+  display: grid;
+  place-items: center;
+  background:
+    repeating-linear-gradient(45deg, #15181d, #15181d 5px, #1a1e24 5px, #1a1e24 10px);
+}
+
+.bird-task__thumb.is-missing::after {
+  content: '';
+  width: 15px;
+  height: 15px;
+  border: 1px dashed #3a4351;
+  border-radius: 4px;
+}
+
+.bird-task__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bird-task__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bird-task__top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.bird-task__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bird-task__pill {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.bird-task__pill--queued {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+}
+
+.bird-task__pill--running {
+  border-color: rgba(255, 191, 71, 0.36);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.bird-task__pill--completed {
+  border-color: rgba(255, 212, 122, 0.34);
+  background: rgba(255, 212, 122, 0.1);
+  color: #ffd47a;
+}
+
+.bird-task__pill--adopted {
+  border-color: rgba(95, 224, 143, 0.32);
+  background: rgba(95, 224, 143, 0.1);
+  color: var(--ok);
+}
+
+.bird-task__pill--dismissed {
+  border-color: var(--line-soft);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-mute);
+}
+
+.bird-task__pill--failed {
+  border-color: rgba(255, 122, 122, 0.34);
+  background: rgba(255, 122, 122, 0.1);
+  color: var(--danger);
+}
+
+.bird-task__bar {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.bird-task__bar > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-strong), #ffe0a0);
+  transition: width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.bird-task[data-status='adopted'] .bird-task__bar > span {
+  background: linear-gradient(90deg, #35b96d, #7ff0aa);
+}
+
+.bird-task[data-status='failed'] .bird-task__bar > span {
+  background: var(--danger);
+}
+
+.bird-task[data-status='dismissed'] .bird-task__bar > span {
+  background: #4d5666;
+}
+
+.bird-task__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 14px;
+  color: var(--text-mute);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+.bird-task__accent {
+  color: var(--accent);
+}
+
+.bird-task__species {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.bird-task__error {
+  overflow: hidden;
+  color: #ffb4b4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bird-task__dot {
+  color: #454e5c;
+}
+
+/* ------------------------------ 结果 / 失败模态框 ------------------------------ */
+
+.bird-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.bird-result--message {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bird-result__media {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bird-result__frame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #07080a;
+}
+
+.bird-result__frame.is-missing {
+  border-style: dashed;
+}
+
+.bird-result__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #060708;
+}
+
+.bird-result__placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 22px;
+  color: var(--text-mute);
+  font-size: 12px;
+  text-align: center;
+}
+
+.bird-result__placeholder .icon {
+  width: 32px;
+  height: 32px;
+  color: #3f4857;
+}
+
+.bird-result__source {
+  overflow-wrap: anywhere;
+  color: var(--text-mute);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.bird-result__info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.bird-result__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bird-result__status-pill {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.bird-result__status-pill.is-adopted {
+  border-color: rgba(95, 224, 143, 0.32);
+  background: rgba(95, 224, 143, 0.1);
+  color: var(--ok);
+}
+
+.bird-result__status-pill.is-dismissed {
+  border-color: var(--line-soft);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-mute);
+}
+
+.bird-result__species {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.bird-result__latin {
+  color: var(--text-mute);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.bird-result__taxa {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: var(--bg-2);
+}
+
+.bird-result__taxon {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.bird-result__taxon dt {
+  flex: none;
+  width: 20px;
+  color: var(--text-mute);
+}
+
+.bird-result__taxon dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-dim);
+}
+
+.bird-result__confidence {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.bird-result__confidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-mute);
+  font-size: 11px;
+}
+
+.bird-result__confidence-head strong {
+  color: var(--accent);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bird-result__confidence-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.bird-result__confidence-bar > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-strong), #ffe0a0);
+}
+
+.bird-result__note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.bird-result__note .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--text-mute);
+}
+
+.bird-result__alts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bird-result__alts-title {
+  color: var(--text-mute);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
+.bird-result__alt-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 9px;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.bird-result__alt-confidence {
+  flex: none;
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.bird-result__model {
+  color: var(--text-mute);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.bird-result__error {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px;
+  border: 1px solid rgba(255, 122, 122, 0.3);
+  border-radius: 10px;
+  background: rgba(255, 122, 122, 0.06);
+}
+
+.bird-result__error-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #ffb4b4;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.bird-result__error-head .icon {
+  width: 15px;
+  height: 15px;
+  color: var(--danger);
+}
+
+.bird-result__error-code {
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.bird-result__error-message {
+  overflow-wrap: anywhere;
+  color: #ffb4b4;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.bird-result__progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 22px 16px 12px;
+}
+
+.bird-result__progress-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.bird-result__progress .bird-result__confidence-bar {
+  width: min(360px, 100%);
+}
+
+.bird-result__progress-meta {
+  color: var(--text-mute);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------ 设置弹窗 ------------------------------ */
+
+.bird-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.bird-settings__lead {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.bird-settings__lead strong {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.bird-settings__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 191, 71, 0.24);
+  border-radius: 9px;
+  background: linear-gradient(90deg, rgba(255, 191, 71, 0.08), rgba(255, 191, 71, 0.02));
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.bird-settings__notice .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.bird-settings__notice strong {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.bird-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bird-field__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.bird-field__hint {
+  color: var(--text-mute);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+.bird-field__help {
+  color: var(--text-mute);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.bird-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  background: var(--bg-0);
+  color: var(--text);
+  font-size: 12.5px;
+  transition: border-color 0.15s ease;
+}
+
+.bird-input:focus {
+  border-color: rgba(255, 191, 71, 0.55);
+}
+
+.bird-input::placeholder {
+  color: var(--text-mute);
+}
+
+.bird-advanced {
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: var(--bg-2);
+}
+
+.bird-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.bird-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.bird-advanced > summary .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-mute);
+}
+
+.bird-advanced[open] > summary {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bird-advanced__body {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 12px;
+}
+
+.bird-config-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 11px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--bg-0);
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.bird-config-status .icon {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+}
+
+.bird-config-status.is-ok {
+  border-color: rgba(95, 224, 143, 0.26);
+  color: #a6ecc4;
+}
+
+.bird-config-status.is-ok .icon {
+  color: var(--ok);
+}
+
+.bird-config-status.is-warn {
+  border-color: rgba(255, 191, 71, 0.28);
+  color: #ffe0a0;
+}
+
+.bird-config-status.is-warn .icon {
+  color: var(--accent);
+}
+
+/* ------------------------------ 启动页设置入口 ------------------------------ */
+
+.start-bird-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px 12px;
+}
+
+.bird-settings-button {
+  height: 36px;
+  color: var(--text-dim);
+}
+
+.bird-settings-button .icon {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+
+.bird-settings-button:hover:not(:disabled) {
+  border-color: rgba(255, 191, 71, 0.4);
+  color: var(--accent);
+}
+
+.start-bird-hint {
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.start-bird-hint kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-0);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+
+/* ------------------------------ 结果页：AI 识鸟 ------------------------------ */
+
+.results-bird {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 13px;
+  padding: 5px 11px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.results-bird .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.results-bird strong {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.bird-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid rgba(255, 191, 71, 0.3);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.bird-pill .icon {
+  width: 10px;
+  height: 10px;
+}
+
+/* ------------------------------ 响应式 ------------------------------ */
+
+@media (max-width: 1180px) {
+  .photo-info {
+    width: 214px;
+  }
+
+  .bird-queue {
+    width: 264px;
+  }
+
+  .picker.is-info-collapsed .photo-info,
+  .picker.is-queue-collapsed .bird-queue {
+    width: 44px;
+  }
+}
+
+@media (max-width: 980px) {
+  .photo-info {
+    width: 190px;
+  }
+
+  .bird-queue {
+    width: 236px;
+  }
+
+  .bird-result {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bird-result__frame {
+    aspect-ratio: 16 / 9;
+  }
+}
+
+@media (max-width: 760px) {
+  .photo-info {
+    width: 170px;
+  }
+
+  .bird-queue {
+    width: 208px;
+  }
+
+  .btn--bird .btn__label {
+    display: none;
+  }
+
+  .btn--bird {
+    padding: 0 9px;
+  }
+}
+
+@media (max-width: 680px) {
+  .photo-info {
+    width: 156px;
+  }
+
+  .bird-queue {
+    width: 188px;
+  }
+}
+
+/* =====================================================================
+   AI 识鸟结果：原照片 + AI 参考照片对照（v5.2）
+   ===================================================================== */
+
+.bird-result--with-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bird-result__compare {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.bird-result__compare--single {
+  grid-template-columns: minmax(0, 460px);
+}
+
+/* 图片框改为「上图 + 下方标题」，避免 figcaption 被 place-items 居中盖住 */
+.bird-result__frame {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  aspect-ratio: auto;
+  margin: 0;
+}
+
+.bird-result__img {
+  flex: 1 1 auto;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+}
+
+.bird-result__placeholder {
+  flex: 1 1 auto;
+  justify-content: center;
+  aspect-ratio: 4 / 3;
+}
+
+.bird-result__frame-caption {
+  padding: 7px 10px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .bird-result__compare {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

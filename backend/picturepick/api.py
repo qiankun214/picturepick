@@ -32,6 +32,13 @@ from .errors import (
     ApiError,
 )
 from .models import (
+    BirdAdoptResponse,
+    BirdConfigRequest,
+    BirdStatusResponse,
+    BirdTask,
+    BirdTaskCreateRequest,
+    BirdTaskListResponse,
+    BirdVerifyResponse,
     CreateSessionRequest,
     CurrentSessionResponse,
     DialogResult,
@@ -70,6 +77,11 @@ def _session(request: Request, session_id: str) -> Session:
     if session is None:
         raise ApiError(SESSION_NOT_FOUND, "会话不存在或已过期")
     return session
+
+
+def _bird(request: Request):
+    """AI 识鸟服务（app.state.bird，测试可注入）。"""
+    return request.app.state.bird
 
 
 # ---- 系统接口 --------------------------------------------------------------
@@ -329,3 +341,90 @@ def export_photos(
     """
     session = _session(request, session_id)
     return export.copy_last_round_photos(session, payload.destination)
+
+
+# ---- AI 识鸟（第 5 版） ----------------------------------------------------
+
+
+@router.get("/bird/status", response_model=BirdStatusResponse, summary="AI 识鸟配置状态")
+def bird_status(request: Request) -> BirdStatusResponse:
+    """返回是否已配置 / 模型 / 掩码 Key / 队列长度（永不返回明文 Key）。"""
+    return _bird(request).status()
+
+
+@router.put("/bird/config", response_model=BirdStatusResponse, summary="更新 AI 识鸟配置")
+def bird_update_config(payload: BirdConfigRequest, request: Request) -> BirdStatusResponse:
+    """字段缺省 = 保持；显式 null / 空字符串 = 清除。"""
+    updates = payload.dict(exclude_unset=True)
+    return _bird(request).update_config(updates)
+
+
+@router.post("/bird/verify", response_model=BirdVerifyResponse, summary="测试 AI 识鸟连接")
+def bird_verify(request: Request) -> BirdVerifyResponse:
+    """用一条极小请求验证 Key/模型/网络；失败也返回 200 + ok=false。"""
+    return _bird(request).verify()
+
+
+@router.post(
+    "/sessions/{session_id}/bird-tasks",
+    response_model=BirdTask,
+    status_code=201,
+    summary="提交 AI 识鸟任务（后台队列）",
+)
+def create_bird_task(
+    session_id: str,
+    payload: BirdTaskCreateRequest,
+    request: Request,
+) -> BirdTask:
+    return _bird(request).submit(session_id, payload.photoId)
+
+
+@router.get(
+    "/sessions/{session_id}/bird-tasks",
+    response_model=BirdTaskListResponse,
+    summary="AI 识鸟任务列表（含队列与进度）",
+)
+def list_bird_tasks(session_id: str, request: Request) -> BirdTaskListResponse:
+    session = _session(request, session_id)
+    return _bird(request).list_tasks(session.id)
+
+
+@router.get(
+    "/sessions/{session_id}/bird-tasks/{task_id}",
+    response_model=BirdTask,
+    summary="单个 AI 识鸟任务",
+)
+def get_bird_task(session_id: str, task_id: str, request: Request) -> BirdTask:
+    _session(request, session_id)
+    return _bird(request).manager.model(task_id, session_id=session_id)
+
+
+@router.post(
+    "/sessions/{session_id}/bird-tasks/{task_id}/adopt",
+    response_model=BirdAdoptResponse,
+    summary="采纳识别结果（写结果 JSON + 照片 EXIF）",
+)
+def adopt_bird_task(session_id: str, task_id: str, request: Request) -> BirdAdoptResponse:
+    return _bird(request).adopt(session_id, task_id)
+
+
+@router.post(
+    "/sessions/{session_id}/bird-tasks/{task_id}/dismiss",
+    response_model=BirdTask,
+    summary="忽略识别任务",
+)
+def dismiss_bird_task(session_id: str, task_id: str, request: Request) -> BirdTask:
+    return _bird(request).dismiss(session_id, task_id)
+
+
+@router.get(
+    "/sessions/{session_id}/bird-tasks/{task_id}/reference",
+    summary="参考照片（后端代理，内存中的临时图片）",
+)
+def bird_task_reference(session_id: str, task_id: str, request: Request) -> Response:
+    image = _bird(request).reference(session_id, task_id)
+    return Response(
+        content=image.data,
+        media_type=image.content_type,
+        headers={"Cache-Control": "no-store"},
+    )

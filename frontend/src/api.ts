@@ -8,6 +8,12 @@
  */
 import type {
   ApiErrorBody,
+  BirdAdoptResponse,
+  BirdConfigRequest,
+  BirdStatus,
+  BirdTask,
+  BirdTasksResponse,
+  BirdVerifyResponse,
   CreateServerSessionRequest,
   CurrentSessionResponse,
   DialogPickResponse,
@@ -41,6 +47,17 @@ const ERROR_MESSAGES: Record<string, string> = {
   INVALID_RESTORE: 'JSON 内容不完整或格式不正确，无法恢复现场',
   UNSUPPORTED_SCHEMA: 'JSON 版本不受支持（需要 schemaVersion=1）',
   PHASE_PICKING: '当前会话已在选片中，无需继续筛选',
+  // AI 识鸟（docs/BIRDID-CONTRACT.md §6）
+  INVALID_CONFIG: 'AI 识鸟配置不合法',
+  BIRD_NOT_CONFIGURED: '尚未配置 AI 识鸟，请先填写火山方舟 API Key',
+  BIRD_TASK_NOT_FOUND: 'AI 识鸟任务不存在或已失效',
+  BIRD_TASK_NOT_COMPLETED: '该任务尚未完成识别，暂时不能采纳',
+  BIRD_TASK_ADOPTED: '该任务已采纳，不能忽略',
+  BIRD_RESULT_UNAVAILABLE: '这次识别没有给出鸟种，无法采纳',
+  BIRD_REFERENCE_UNAVAILABLE: '没有可用的参考照片',
+  BIRD_PARSE_ERROR: 'AI 返回内容无法解析，请重试',
+  BIRD_API_ERROR: 'AI 识鸟服务调用失败，请检查 API Key 与模型名',
+  BIRD_API_TIMEOUT: 'AI 识鸟请求超时，请稍后重试',
 };
 
 export function friendlyMessage(code: string, fallback: string): string {
@@ -236,6 +253,62 @@ export function exportPhotos(sessionId: string, destination: string): Promise<Ex
     method: 'POST',
     body: { destination },
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* AI 识鸟（docs/BIRDID-CONTRACT.md §6）                                */
+/* ------------------------------------------------------------------ */
+
+/** GET /api/bird/status：配置状态 + 队列计数（永远 200）。 */
+export function getBirdStatus(signal?: AbortSignal): Promise<BirdStatus> {
+  return request<BirdStatus>('/bird/status', { signal });
+}
+
+/** PUT /api/bird/config：保存配置，返回最新状态。 */
+export function updateBirdConfig(payload: BirdConfigRequest): Promise<BirdStatus> {
+  return request<BirdStatus>('/bird/config', { method: 'PUT', body: payload });
+}
+
+/** POST /api/bird/verify：用当前配置发一个极小的真实请求验证连通性。 */
+export function verifyBirdConfig(): Promise<BirdVerifyResponse> {
+  return request<BirdVerifyResponse>('/bird/verify', { method: 'POST' });
+}
+
+/** POST /api/sessions/{sid}/bird-tasks：提交识别（同一照片的 active 任务会被后端复用）。 */
+export function createBirdTask(sessionId: string, photoId: string): Promise<BirdTask> {
+  return request<BirdTask>(`/sessions/${encodeURIComponent(sessionId)}/bird-tasks`, {
+    method: 'POST',
+    body: { photoId },
+  });
+}
+
+/** GET /api/sessions/{sid}/bird-tasks：任务列表（后端已按运行/排队/创建时间排序）。 */
+export function getBirdTasks(sessionId: string, signal?: AbortSignal): Promise<BirdTasksResponse> {
+  return request<BirdTasksResponse>(
+    `/sessions/${encodeURIComponent(sessionId)}/bird-tasks`,
+    { signal },
+  );
+}
+
+/** POST .../bird-tasks/{tid}/adopt：采纳结果并写入照片 EXIF。 */
+export function adoptBirdTask(sessionId: string, taskId: string): Promise<BirdAdoptResponse> {
+  return request<BirdAdoptResponse>(
+    `/sessions/${encodeURIComponent(sessionId)}/bird-tasks/${encodeURIComponent(taskId)}/adopt`,
+    { method: 'POST' },
+  );
+}
+
+/** POST .../bird-tasks/{tid}/dismiss：忽略任务（幂等）。 */
+export function dismissBirdTask(sessionId: string, taskId: string): Promise<BirdTask> {
+  return request<BirdTask>(
+    `/sessions/${encodeURIComponent(sessionId)}/bird-tasks/${encodeURIComponent(taskId)}/dismiss`,
+    { method: 'POST' },
+  );
+}
+
+/** 参考照片地址（后端代理，不落盘；浏览器不直连外网图片）。 */
+export function birdTaskReferenceUrl(sessionId: string, taskId: string): string {
+  return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/bird-tasks/${encodeURIComponent(taskId)}/reference`;
 }
 
 /* ------------------------------------------------------------------ */

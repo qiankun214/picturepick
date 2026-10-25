@@ -32,6 +32,7 @@ from .errors import (
 )
 from .export import build_last_round, build_result, isoformat, now_local
 from .models import (
+    BirdObservation,
     FinishResponse,
     PhotoItem,
     PickResult,
@@ -114,6 +115,8 @@ class Session:
         self.rounds: List[Round] = [Round(1, ordered_ids)]
         self.phase = PHASE_PICKING
         self._finished_result: Optional[PickResult] = None
+        #: photo_id -> 已采纳的 AI 鸟类识别（第 5 版）
+        self.bird_observations: Dict[str, BirdObservation] = {}
 
     @classmethod
     def from_restore(
@@ -124,11 +127,13 @@ class Session:
         rounds: List[Round],
         created_at: Optional[datetime] = None,
         source_label: Optional[str] = None,
+        bird_observations: Optional[Dict[str, BirdObservation]] = None,
     ) -> "Session":
         """由 ``POST /api/sessions/restore`` 重建的、``phase="finished"`` 的会话。
 
         ``root`` 用于图片/导出的路径安全校验；``source_label`` 用于展示与结果的
         ``sourceDirectory``（absolutePath 回退时保留 JSON 的原始 sourceDirectory）。
+        ``bird_observations`` 来自结果 JSON 的 ``photos[].bird``（老 JSON 没有则为空）。
         """
         session = cls(
             uuid.uuid4().hex,
@@ -144,6 +149,12 @@ class Session:
         session.phase = PHASE_FINISHED
         # 恢复后的结果按当前（重建的）状态实时生成，不冻结上次的 generatedAt。
         session._finished_result = None
+        if bird_observations:
+            session.bird_observations = {
+                photo_id: observation
+                for photo_id, observation in bird_observations.items()
+                if photo_id in session.photos
+            }
         return session
 
     # ---- 基本属性 ----------------------------------------------------------
@@ -180,6 +191,21 @@ class Session:
     def picked_in_rounds(self, photo_id: str) -> List[int]:
         return [round_.index for round_ in self.rounds if photo_id in round_.picked]
 
+    # ---- AI 识鸟（第 5 版） -------------------------------------------------
+
+    def bird_observation(self, photo_id: str) -> Optional[BirdObservation]:
+        return self.bird_observations.get(photo_id)
+
+    @property
+    def bird_identified_count(self) -> int:
+        return len(self.bird_observations)
+
+    def adopt_bird_observation(self, photo_id: str, observation: BirdObservation) -> None:
+        """记录/覆盖一张照片的鸟类识别结果；已结束会话的结果缓存随之失效。"""
+        self.get_photo(photo_id)  # 不存在时抛 PHOTO_NOT_FOUND
+        self.bird_observations[photo_id] = observation
+        self._finished_result = None
+
     def photo_item(self, photo_id: str) -> PhotoItem:
         photo = self.get_photo(photo_id)
         current = self.current_round
@@ -191,6 +217,7 @@ class Session:
             pickCount=self.pick_count(photo_id),
             picked=photo_id in current.picked,
             viewed=photo_id in current.viewed,
+            bird=self.bird_observations.get(photo_id),
         )
 
     def summary(self) -> SessionSummary:
@@ -210,6 +237,7 @@ class Session:
             roundPhotoCount=len(current.photo_ids),
             viewedCount=len(current.viewed),
             pickCount=len(current.picked),
+            birdIdentifiedCount=self.bird_identified_count,
             rounds=[
                 RoundSummary(
                     index=round_.index,
