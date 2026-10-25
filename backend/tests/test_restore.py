@@ -228,9 +228,9 @@ def test_restore_browser_origin_rejected(client, library):
     assert error_code(response) == "INVALID_SOURCE"
 
 
-def test_restore_invalid_path(client, library, tmp_path):
+def test_restore_missing_source_directory(client, library):
     _original_sid, result = _make_two_round_result(client, library)
-    for source in (str(tmp_path / "no-such-dir"), "", None):
+    for source in ("", "   ", None):
         payload = copy.deepcopy(result)
         payload["sourceDirectory"] = source
         response = _restore(client, payload)
@@ -238,19 +238,25 @@ def test_restore_invalid_path(client, library, tmp_path):
         assert error_code(response) == "INVALID_PATH"
 
 
-def test_restore_no_photos_in_directory(client, library, tmp_path):
+def test_restore_no_photos_in_directory_falls_back_to_absolute_paths(client, library, tmp_path):
+    """源目录不可扫描时回退用 JSON absolutePath（第 3 版 v4.1 兼容行为）。"""
     _original_sid, result = _make_two_round_result(client, library)
     empty = tmp_path / "empty"
     empty.mkdir()
     payload = copy.deepcopy(result)
     payload["sourceDirectory"] = str(empty)
     response = _restore(client, payload)
-    assert response.status_code == 400
-    assert error_code(response) == "NO_PHOTOS"
+    assert response.status_code == 201, response.text
+    summary = response.json()
+    assert summary["restored"] is True
+    # 回退重建：库总数 = JSON 中仍存在的照片数
+    assert summary["libraryTotal"] == len(payload["photos"])
+    assert summary["rounds"][0]["photoCount"] == len(payload["photos"])
+    assert summary["sourceLabel"] == str(empty)
 
 
 def test_restore_no_matching_photos(client, library):
-    """目录里还有新照片，但 JSON 里的照片全部被删除 → NO_PHOTOS。"""
+    """目录里有新照片，但 JSON 照片与 absolutePath 全部失效 → INVALID_PATH（含源目录原文）。"""
     _original_sid, result = _make_two_round_result(client, library)
     for photo in sorted(library.rglob("*")):
         if photo.is_file() and photo.suffix.lower() in {".jpg", ".jpeg"}:
@@ -258,7 +264,8 @@ def test_restore_no_matching_photos(client, library):
     make_jpeg(library / "brand-new.jpg")
     response = _restore(client, result)
     assert response.status_code == 400
-    assert error_code(response) == "NO_PHOTOS"
+    assert error_code(response) == "INVALID_PATH"
+    assert result["sourceDirectory"] in response.json()["detail"]["message"]
 
 
 @pytest.mark.parametrize(
@@ -289,7 +296,6 @@ def test_restore_no_matching_photos(client, library):
             id="pickedInRounds-duplicate",
         ),
         pytest.param(lambda payload: payload.update(roundsPlayed=0), id="roundsPlayed-zero"),
-        pytest.param(lambda payload: payload.pop("roundsPlayed"), id="missing-roundsPlayed"),
         pytest.param(
             lambda payload: payload["photos"][0].update(pickCount="many"),
             id="invalid-pickCount",

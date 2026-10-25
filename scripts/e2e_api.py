@@ -422,8 +422,9 @@ def main() -> int:
               expect_error(c.post("/api/sessions/restore", json=wrong_origin), 400, "INVALID_SOURCE"))
         wrong_dir = json.loads(json.dumps(res2))
         wrong_dir["sourceDirectory"] = "Z:\\no\\such\\dir"
-        check("restore 目录不存在 400 INVALID_PATH",
-              expect_error(c.post("/api/sessions/restore", json=wrong_dir), 400, "INVALID_PATH"))
+        fallback_resp = c.post("/api/sessions/restore", json=wrong_dir)
+        check("restore 源目录不可用但 absolutePath 有效 → 回退 201",
+              fallback_resp.status_code == 201, fallback_resp.text[:300])
         bad_photos = json.loads(json.dumps(res2))
         bad_photos["photos"] = [{"name": "x.jpg"}]
         check("restore photos 结构非法 400 INVALID_RESTORE",
@@ -433,6 +434,51 @@ def main() -> int:
               expect_error(c.post(f"/api/sessions/{picking_new['id']}/resume"), 409, "PHASE_PICKING"))
         check("最后一轮仅 1 张时 resume 409 NOT_ENOUGH_PICKS",
               expect_error(c.post(f"/api/sessions/{sid}/resume"), 409, "NOT_ENOUGH_PICKS"))
+
+        print("\n[13] 旧版 JSON 恢复兼容（缺少 origin/lastRound，absolutePath 回退）")
+        legacy = json.loads(json.dumps(res2))
+        legacy.pop("origin", None)
+        legacy.pop("lastRound", None)
+        legacy_resp = c.post("/api/sessions/restore", json=legacy)
+        check("旧版 JSON（无 origin/lastRound）restore 201", legacy_resp.status_code == 201, legacy_resp.text[:300])
+        if legacy_resp.status_code == 201:
+            legacy_session = legacy_resp.json()
+            check("旧版恢复 restored=true", legacy_session.get("restored") is True)
+            check("旧版恢复轮次与第 2 轮照片数正确",
+                  legacy_session["roundIndex"] == 2 and legacy_session["roundPhotoCount"] == 3,
+                  json.dumps(legacy_session)[:300])
+            legacy_result = c.get(f"/api/sessions/{legacy_session['id']}/result").json()
+            check("旧版恢复后 lastRound 与 JSON pickedInRounds 推导一致",
+                  legacy_result["lastRound"]["pickedCount"] == 2
+                  and set(legacy_result["lastRound"]["pickedPhotoIds"])
+                  == {p["id"] for p in res2["photos"] if 2 in p["pickedInRounds"]},
+                  json.dumps(legacy_result["lastRound"])[:300])
+
+        renamed_dir = json.loads(json.dumps(res2))
+        renamed_dir.pop("origin", None)
+        renamed_dir.pop("lastRound", None)
+        renamed_dir["sourceDirectory"] = "Z:\\moved-or-renamed-dir\\JPG"
+        renamed_resp = c.post("/api/sessions/restore", json=renamed_dir)
+        check("旧版 JSON 源目录不可用但 absolutePath 有效 → 回退 restore 201",
+              renamed_resp.status_code == 201, renamed_resp.text[:300])
+        if renamed_resp.status_code == 201:
+            renamed_session = renamed_resp.json()
+            check("回退恢复 libraryTotal=可用照片数", renamed_session["libraryTotal"] == len(expected),
+                  f"{renamed_session['libraryTotal']} vs {len(expected)}")
+            check("回退恢复第 2 轮照片数正确", renamed_session["roundPhotoCount"] == 3,
+                  str(renamed_session["roundPhotoCount"]))
+
+        broken = json.loads(json.dumps(res2))
+        broken.pop("origin", None)
+        broken["sourceDirectory"] = "Z:\\moved-or-renamed-dir\\JPG"
+        for photo in broken["photos"]:
+            photo["absolutePath"] = "Z:\\moved-or-renamed-dir\\JPG\\" + photo["name"]
+        broken_resp = c.post("/api/sessions/restore", json=broken)
+        check("旧版 JSON 源目录与 absolutePath 都不可用 400 INVALID_PATH",
+              expect_error(broken_resp, 400, "INVALID_PATH"), broken_resp.text[:300])
+        check("INVALID_PATH 消息包含源目录原文",
+              "moved-or-renamed-dir" in broken_resp.json().get("detail", {}).get("message", ""),
+              broken_resp.text[:300])
 
     print(f"\n===== E2E 结果: PASS={PASS} FAIL={FAIL} =====")
     return 0 if FAIL == 0 else 1

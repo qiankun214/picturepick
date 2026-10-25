@@ -1,4 +1,4 @@
-# PicturePick 验证记录（第 4 版）
+# PicturePick 验证记录（第 4.1 版）
 
 环境：Windows 11 23H2 (10.0.22621) / Python 3.10.11 / Node v22.20.0 / npm 10.9.3 /
 FastAPI 0.115.14 / uvicorn 0.34.3 / Pillow 9.3.0 / PyInstaller 6.22.3 /
@@ -12,12 +12,11 @@ cd E:\picturePick\backend
 python -m pytest -q
 ```
 
-结果：**170 passed**（原 131 个 v3 用例全部保留 + 新增 39 个 restore/resume 用例）。
+结果：**179 passed**（原 170 个 v4 用例按新语义调整后保留 + 新增 10 个 `test_restore_legacy.py` 用例）。
 覆盖：扫描过滤/排序、server 与 browser 双来源会话创建与校验、分页、原图/缩略图、viewed/pick 幂等、
 多轮状态机、finish 结果 JSON（origin / sourceDirectory / absolutePath / lastRound）、下载/导出、
-export-photos 后端复制（同名 `-1` 不覆盖、目标目录校验、NO_PICKED_PHOTOS、INVALID_SOURCE、逐字节一致、失败回滚）、
-**restore 恢复现场**（schema/origin/目录/照片结构校验、轮次重建、增删文件容错、lastRound 映射）、
-**resume 继续筛选**（阶段/数量校验、历史计数累加）、静态/SPA、CORS、错误码、CLI。
+export-photos 后端复制、restore 恢复现场（含**旧版 JSON 无 origin/lastRound 兼容**、
+**源目录不可用时 absolutePath 回退**、增删文件容错）、resume 继续筛选、静态/SPA、CORS、错误码、CLI。
 
 ## 2. API 端到端（真实 HTTP + 真实 JPEG 样例）
 
@@ -28,13 +27,19 @@ python -m picturepick serve --port 8140 --no-open
 python scripts/e2e_api.py --base-url http://127.0.0.1:8140 --photos-dir samples\photos
 ```
 
-结果：**PASS=124 / FAIL=0**。包含：
+结果：**PASS=133 / FAIL=0**。包含：
 - server 来源完整流程（创建→分页→图片→pick/unpick→三轮→finish→下载/导出）；
 - **export-photos 后端复制**：最后一轮保留照片复制到目标目录、同名自动 `-1` 不覆盖、
   目标不存在/是文件 → `INVALID_PATH`、无 pick → `NO_PICKED_PHOTOS`、browser 来源 → `INVALID_SOURCE`；
 - **restore 恢复现场**：保存结果 JSON → `POST /api/sessions/restore` 201、`restored=true`、
   phase/roundIndex/libraryTotal/来源目录正确、恢复结果 pickCount/lastRound/absolutePath 与保存 JSON 一致、
   恢复后可 export-photos；错误码 `UNSUPPORTED_SCHEMA`/`INVALID_SOURCE`/`INVALID_PATH`/`INVALID_RESTORE`；
+- **旧版 JSON 兼容（v4.1）**：缺少 `origin`/`lastRound` 的 v1 格式 JSON 可恢复（origin 按 server、lastRound 由
+  `pickedInRounds` 推导）；源目录不可扫描时回退 `photos[].absolutePath` 中仍存在的文件恢复（目录改名场景）；
+  两者都不可用 → `INVALID_PATH` 且 message 包含源目录原文。
+  真实案例 `D:\迅雷下载\picturepick-JPG-20261025-132456.json`（456 张、无 origin/lastRound、指向网络盘 `Z:`）：
+  修复前返回 `INVALID_SOURCE`；修复后不再报来源错误，源盘不可访问时返回带 `Z:\...` 路径的 `INVALID_PATH`，
+  网络盘连接正常即可恢复；
 - **resume 继续筛选**：恢复会话 → resume 200 → phase=picking、roundIndex+1、新一轮照片=原 lastRound、
   历史 pickCount 累加；`PHASE_PICKING` / `NOT_ENOUGH_PICKS` 错误分支；
 - **browser 来源兼容接口**（元数据创建→分页→`/image` 404→多轮→finish→lastRound）；

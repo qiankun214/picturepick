@@ -123,8 +123,13 @@ class Session:
         photos: List[ScannedPhoto],
         rounds: List[Round],
         created_at: Optional[datetime] = None,
+        source_label: Optional[str] = None,
     ) -> "Session":
-        """由 ``POST /api/sessions/restore`` 重建的、``phase="finished"`` 的会话。"""
+        """由 ``POST /api/sessions/restore`` 重建的、``phase="finished"`` 的会话。
+
+        ``root`` 用于图片/导出的路径安全校验；``source_label`` 用于展示与结果的
+        ``sourceDirectory``（absolutePath 回退时保留 JSON 的原始 sourceDirectory）。
+        """
         session = cls(
             uuid.uuid4().hex,
             root,
@@ -132,7 +137,7 @@ class Session:
             photos,
             created_at=created_at,
             origin=ORIGIN_SERVER,
-            source_label=root,
+            source_label=source_label or root,
             restored=True,
         )
         session.rounds = list(rounds)

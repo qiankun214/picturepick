@@ -248,8 +248,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithIn
 
 | 项目 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端单元/接口 | `cd backend; python -m pytest -q` | 170 passed |
-| API 端到端（server/browser + export-photos + restore/resume） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | PASS=124 / FAIL=0 |
+| 后端单元/接口 | `cd backend; python -m pytest -q` | 179 passed |
+| API 端到端（server/browser + export-photos + restore/resume + 旧版 JSON 兼容） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | PASS=133 / FAIL=0 |
 | 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | PASS=71 / FAIL=0（含恢复现场与继续筛选、导出逐字节校验） |
 | 桌面版 | `powershell -File scripts\verify-desktop.ps1` | 后端冻结自检通过；GUI 窗口验证进行中（见下） |
 
@@ -271,4 +271,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithIn
 - **选择文件夹后没有反应**：浏览器模式下文件夹对话框由本机后端弹出（浏览器安全限制无法直接把绝对路径交给网页）；
   若返回 `DIALOG_UNAVAILABLE`，请改用命令行 `python -m picturepick serve --dir <目录>` 或桌面版。
 - **导出保留照片时**：会弹出系统文件夹对话框选择目标目录，随后由后端复制照片（同名自动加 `-1`/`-2`，不覆盖原文件）。
+- **载入 JSON 无法恢复**：JSON 必须来自本机扫描的选片会话（`origin=server` 或旧版无 origin 字段）；
+  恢复时源目录/照片必须可访问（网络盘如 `Z:` 需先连接并保持原来的绝对路径，或照片仍存在于 JSON 记录的路径）。
+  旧版 JSON（没有 `lastRound`）会自动兼容；若目录被移动/改名但文件仍在旧绝对路径下，会按 `absolutePath` 回退恢复。
+  错误提示会带上 JSON 里的源目录原文，便于判断是网络盘未连接还是路径已变化。
 - **照片不会上传**：浏览器只从后端 `/image` 按需加载要显示的那一张图片；整目录扫描与文件读取都在本机后端完成。

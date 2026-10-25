@@ -216,15 +216,19 @@
 { "schemaVersion": 1, "generatedAt": "...", "origin": "server", "sourceDirectory": "E:\\photos", "photos": [ ... ] }
 ```
 
-- 校验：`schemaVersion` 必须为 1（否则 400 `UNSUPPORTED_SCHEMA`）；`origin` 必须为 `"server"`
-  （否则 400 `INVALID_SOURCE`，浏览器来源没有可重新扫描的路径）；`sourceDirectory` 必须是存在且可读的目录
-  （否则 400 `INVALID_PATH`）；`photos` 结构非法 → 400 `INVALID_RESTORE`。
+- 校验：`schemaVersion` 必须为 1（缺失时按 1 处理；否则 400 `UNSUPPORTED_SCHEMA`）；
+  `origin` 缺失时按 `"server"` 处理（兼容旧版 JSON），只有显式 `origin="browser"` 才返回 400 `INVALID_SOURCE`；
+  `photos` 结构非法 → 400 `INVALID_RESTORE`。
 - 后端**重新扫描 `sourceDirectory`**，按 `relativePath` 匹配照片（大小写不敏感）；JSON 中已不存在的照片会被忽略。
+  若源目录不可访问、或扫描后一张都匹配不到，则**回退用 `photos[].absolutePath`** 中仍存在的文件重建
+  （适用于目录被移动/改名但文件路径仍可访问的情况）；两者都不可用时返回 400 `INVALID_PATH`，
+  `message` 会包含 `sourceDirectory` 原文，便于定位（如网络盘未连接）。
 - 重建轮次与计数（无需额外保存轮次明细）：
-  - 第 1 轮 = 当前扫描到的全部照片；
+  - 第 1 轮 = 当前可用的全部照片；
   - 第 i 轮（i ≥ 2）= JSON 中 `pickedInRounds` 包含 `i-1` 的照片（保持上一轮顺序）；
   - `pickCount` / `pickedInRounds` 按 JSON 恢复；`viewed` 重置为 0；
-  - 最后一轮保留照片 = JSON `lastRound.pickedPhotoIds`（映射到重新扫描到的照片）。
+  - 最后一轮保留照片 = JSON `lastRound.pickedPhotoIds`；旧版 JSON 无 `lastRound` 时按
+    `pickedInRounds` 含 `roundsPlayed` 自动推导。
 - 恢复后的会话 `phase="finished"`、`roundIndex=roundsPlayed`，可直接看结果、下载 JSON、导出照片，
   也可调用 `POST /api/sessions/{sid}/resume` 继续筛一轮。
 - 成功 → 201 + `SessionSummary`（其中 `restored=true`）。
