@@ -28,6 +28,7 @@ release/
 .scratch/
 samples/
 .picturepick-runs/
+.pytest-run/
 *.log
 
 # OS
