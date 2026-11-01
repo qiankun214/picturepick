@@ -53,10 +53,12 @@
 
 ## 三种运行方式
 
-### 方式一：桌面版（免安装，开箱即用）
+### 方式一：桌面版（Electron，免安装，开箱即用）
 
-桌面版是 **PyInstaller + pywebview（Edge WebView2）** 原生窗口，内置 Python 后端与前端资源，
-不需要预装 Python，也不依赖 Electron。
+桌面版是 **Electron 外壳 + PyInstaller 打包的 Python 后端 sidecar**：窗口用 Electron 内置 Chromium 渲染，
+后端仍是同一份 FastAPI 应用（由 sidecar 子进程在 `127.0.0.1` 上提供），前端资源内嵌，不需要预装 Python。
+选择 Electron 是因为它自带 Chromium、三平台渲染一致，且不依赖系统 WebView / pythonnet
+（旧的 WebView2 + pywebview 方案因 Windows pythonnet/.NET 兼容问题降级为兼容方案，见文末）。
 
 **打包**（在本机运行，一条命令）：
 
@@ -69,35 +71,37 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 
 | 路径 | 说明 |
 | --- | --- |
-| `release/PicturePick-WebView2/PicturePick.exe` | 绿色版目录（整个目录一起分发，双击即用，约 33 MB） |
-| `release/PicturePick-WebView2-win-x64.zip` | 上述目录的压缩包（约 17 MB） |
+| `release/win-unpacked/PicturePick.exe` | 绿色版目录（整个目录一起分发，双击即用，约 316 MB） |
+| `release/PicturePick-1.0.0-win-x64-portable.zip` | 上述目录的压缩包（约 133 MB） |
+| `release/PicturePick-1.0.0-win-x64-portable.exe`、`...-setup.exe` | 可选安装包（`build.ps1 -WithInstaller`） |
 
-> 已知问题：打包后的 WebView2 窗口需要 pythonnet 加载 .NET 运行时，当前发行包在部分机器上会报
-> `Failed to resolve Python.Runtime.Loader.Initialize`（已定位为 .NET Framework/coreclr 选择问题，修复中）。
-> 修复完成前请优先使用下方「方式二：命令行 + 浏览器」，功能完全一致。
+> 体积比旧 WebView2 方案（约 33 MB）大，这是 Electron 自带 Chromium 的代价；换来的是一致渲染、
+> 不依赖系统 WebView2 / .NET Framework、以及后续 mac/Linux 可直接复用同一套壳。
+
+> **重要（本机 DSH 环境）**：不要把 `release/win-unpacked` 留在 `E:\picturePick` 里直接双击——
+> DSH 工作区会给文件加 Low 完整性级别和拒绝删除等 ACL，Electron 的 Chromium 启动时会静默崩溃
+> （Windows 事件日志 `0x80000003`，无窗口）。请把 `PicturePick-*-win-x64-portable.zip` 复制到
+> 桌面等普通目录解压后**直接双击 `PicturePick.exe`**（不需要任何 cmd），
+> 或执行 `build-electron.cmd -Deploy` 自动部署到桌面并创建快捷方式。
 
 **启动后自检 / 验证**：
 
 ```powershell
 # 双击 verify-desktop.cmd，或执行：
-powershell -ExecutionPolicy Bypass -File scripts\verify-desktop.ps1
+powershell -ExecutionPolicy Bypass -File scripts\verify-electron.ps1
 ```
 
-脚本会先做不开窗口的运行时自检（后端/前端/pythonnet/WebView2 桥接），再启动真实窗口、
+脚本会先用包内后端 sidecar 做健康检查（`/api/health` + 首页），再启动真实 Electron 窗口、
 自动截图并退出，最后打印 PASS/FAIL、截图路径与日志。
 
-> 只想验证打包运行时（不弹窗口）可执行：`release\PicturePick-WebView2\PicturePick.exe --selftest-backend`，
-> 结果写入 `%LOCALAPPDATA%\PicturePick\logs\desktop.log`。
-
-> 打包/自检输出如果失败，请把控制台输出与 `.tmp/desktop-verify/` 下的日志发给开发者。
-> 需要排查启动崩溃时可用带控制台的调试版：`powershell -File scripts\build.ps1 -Console`，
-> 然后运行 `build\webview-console\PicturePickConsole\PicturePick.exe --selftest` 查看完整 traceback。
+> 日志：`%APPDATA%\PicturePick\logs\main.log`、`backend.log`（可用 `PICTUREPICK_DESKTOP_LOG_DIR` 覆盖）。
+> 打包/自检失败时，把控制台输出与 `.tmp/electron-verify/` 下的日志发给开发者。
 
 ### 方式二：命令行 + 浏览器（开发/日常使用）
 
 ```powershell
 cd E:\picturePick\backend
-python -m picturepick serve --dir "D:\我的照片"     # 启动后自动打开浏览器
+py -3.12 -m picturepick serve --dir "D:\我的照片"     # 启动后自动打开浏览器
 ```
 
 - 不加 `--dir` 也可以：启动后在网页里点「选择照片文件夹」。
@@ -105,9 +109,9 @@ python -m picturepick serve --dir "D:\我的照片"     # 启动后自动打开�
 - 其他命令：
 
 ```powershell
-python -m picturepick version
-python -m picturepick scan --dir "D:\我的照片"              # 预览会扫到多少张（默认递归）
-python -m picturepick scan --dir "D:\我的照片" --no-recursive
+py -3.12 -m picturepick version
+py -3.12 -m picturepick scan --dir "D:\我的照片"              # 预览会扫到多少张（默认递归）
+py -3.12 -m picturepick scan --dir "D:\我的照片" --no-recursive
 ```
 
 依赖：Python 3.12（3.10 已于 2026-10-01 EOL，升级见 [`docs/PYTHON-UPGRADE.md`](docs/PYTHON-UPGRADE.md)），`pip install -r backend/requirements.txt`（FastAPI / uvicorn / Pillow / pydantic）。
@@ -125,7 +129,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev.ps1
 
 ```powershell
 cd frontend; npm install; npm run build      # → backend/picturepick/webui
-cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
+cd ..\backend; py -3.12 -m picturepick serve    # → http://127.0.0.1:8000/
 ```
 
 ## 使用流程
@@ -206,7 +210,7 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
   $env:PICTUREPICK_ARK_API_KEY = "ark-你的Key"
   # 可选：改用 Responses API 端点（默认是 Chat Completions 端点）
   $env:PICTUREPICK_ARK_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/responses"
-  cd E:\picturePick\backend; python -m picturepick serve --dir "D:\我的照片"
+  cd E:\picturePick\backend; py -3.12 -m picturepick serve --dir "D:\我的照片"
   ```
 
 - **本机配置文件**：页面「保存」写入
@@ -253,7 +257,7 @@ cd ..\backend; python -m picturepick serve    # → http://127.0.0.1:8000/
 
 ```powershell
 $env:PICTUREPICK_BIRD_MOCK = "1"      # 不访问网络，模拟识别 + 内存生成的参考图
-cd E:\picturePick\backend; python -m picturepick serve --dir "D:\我的照片"
+cd E:\picturePick\backend; py -3.12 -m picturepick serve --dir "D:\我的照片"
 ```
 
 - `PICTUREPICK_BIRD_MOCK_DELAY`：单任务模拟耗时秒数（默认 0.6，最大 5）。
@@ -322,7 +326,7 @@ cd E:\picturePick\backend; python -m picturepick serve --dir "D:\我的照片"
 ## 技术架构
 
 ```
-浏览器 / 桌面窗口（WebView2）
+浏览器 / 桌面窗口（Electron / WebView2）
    │  ① 原生文件夹对话框 → 仅把「绝对目录路径」交给后端
    │  ② 页面请求：会话/轮次/pick/JSON；图片按需 GET /image
    ▼
@@ -333,9 +337,10 @@ FastAPI 后端（Python）── 扫描磁盘目录 / 轮次状态机 / pick 计
 ```
 
 照片始终由后端从本机磁盘读取：浏览器只拿到图片的 HTTP 响应，不会把整目录读入内存或上传。
-桌面端（`desktop_webview/`）：进程内后台线程启动同一份 FastAPI 应用 → pywebview 创建 WebView2 窗口 →
-加载 `http://127.0.0.1:<port>/?desktop=webview2`；原生文件夹对话框与「另存为 JSON」通过
-pywebview JS API 提供。导出照片时前端只负责选择目标文件夹，复制由后端完成。
+桌面端（`desktop/`，Electron）：主进程拉起 **PyInstaller 打包的同一份 FastAPI 后端 sidecar** →
+轮询 `/api/health` → 加载 `http://127.0.0.1:<port>/`；原生文件夹对话框与「另存为 JSON」通过
+preload + IPC 提供。导出照片时前端只负责选择目标文件夹，复制由后端完成。
+（`desktop_webview/` 是旧的 WebView2 + pywebview 兼容方案，保留构建入口但不再作为默认。）
 
 ```
 E:\picturePick\
@@ -346,68 +351,76 @@ E:\picturePick\
 │   └── pyproject.toml / requirements.txt
 ├── frontend/                 # TypeScript + Vite 前端（原生 DOM，无框架）
 │   └── src/                  # main / api / directory(取目录路径) / viewer / ui/*（ui/bird/* 为 AI 识鸟界面）
-├── desktop_webview/          # 桌面版：pywebview(WebView2) + PyInstaller（推荐）
-│   ├── picturepick_desktop/  # 桌面主流程与原生桥接（--selftest 自检模式）
-│   └── picturepick-desktop.spec
-├── desktop/                  # 可选历史方案：Electron 外壳（本机环境可能无法启动）
-├── docs/                     # API 契约、架构约定、验证记录、截图
-├── scripts/                  # build.ps1 / verify-desktop.ps1 / dev.ps1 / e2e 脚本 / 样例照片生成器
+├── desktop/                  # 桌面版（主方案）：Electron 外壳 + PyInstaller 后端 sidecar
+│   ├── src/                  # 主进程 main.ts / preload.ts（窗口、原生对话框、sidecar 生命周期）
+│   ├── pyinstaller/          # 后端 sidecar 的 PyInstaller spec
+│   └── scripts/              # pack-portable.mjs（离线绿色版）、eb-sandbox.cjs 等
+├── desktop_webview/          # 兼容方案：pywebview(WebView2) + PyInstaller（不再默认）
+├── docs/                     # API 契约、架构总览（architecture/）、工程化路线图、验证记录、截图
+├── scripts/                  # build.ps1 / verify-electron.ps1 / dev.ps1 / e2e 脚本 / 样例照片生成器
+│                             #   arch_diagrams.py：架构图生成器（Pillow 直出 PNG）
 ├── build.cmd / verify-desktop.cmd   # 双击即可打包 / 自检
-├── build/                    # 打包中间产物（含 build/backend、build/webview）
-└── release/                  # 桌面版产物
+├── build/                    # 打包中间产物（含 build/backend sidecar、build/webview 兼容方案）
+└── release/                  # 桌面版产物（win-unpacked、portable zip、可选安装包）
 ```
 
 接口契约（前后端唯一准绳）见 [`docs/API.md`](docs/API.md)，工程约定见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，
 验收记录见 [`docs/VERIFICATION.md`](docs/VERIFICATION.md)。
 
+**架构图与工程化**：部署拓扑 / 前后端分层职责 / 28 个 API 的域地图 / 状态机 / AI 识鸟时序 见
+[`docs/architecture/OVERVIEW.md`](docs/architecture/OVERVIEW.md)（6 张图由
+[`scripts/arch_diagrams.py`](scripts/arch_diagrams.py) 可复现生成）；
+「vibe code → 可交付工程」的改造路线（六条主线 × P0/P1/P2）见
+[`docs/ENGINEERING-ROADMAP.md`](docs/ENGINEERING-ROADMAP.md)。
+
 ## 从源码构建桌面版
+
+打包/部署的完整说明（参数、产物、排错、跨平台规划）见 [`docs/PACKAGING.md`](docs/PACKAGING.md)；下面是快速命令。
 
 前置：Python 3.12（含 pip；3.10 已 EOL，升级步骤见 [`docs/PYTHON-UPGRADE.md`](docs/PYTHON-UPGRADE.md)）、Node.js 18+（npm）。首次需要安装依赖：
 
 ```powershell
-python -m pip install -r backend\requirements.txt
-python -m pip install -r desktop_webview\requirements.txt   # pywebview + pythonnet（WebView2）
-python -m pip install pyinstaller
+py -3.12 -m pip install -r backend\requirements.txt
+py -3.12 -m pip install pyinstaller
+npm --prefix desktop install --foreground-scripts --no-audit --no-fund
 ```
 
-然后一条命令打包：
+然后一条命令打包（前端 → tsc → 后端 sidecar → Electron 绿色版 + zip）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build.ps1
-# 或双击 build.cmd
+# 或双击 build.cmd；加 -WithInstaller 额外尝试 NSIS / portable 安装包
 ```
 
 分步命令：
 
 ```powershell
-cd frontend
-$env:npm_config_foreground_scripts='true'
-npm install; npm run build          # → backend/picturepick/webui
-cd ..
-python -m PyInstaller --noconfirm --clean --distpath build/webview --workpath build/.pyinstaller-webview desktop_webview/picturepick-desktop.spec
-# 产物：build/webview/PicturePick/PicturePick.exe
+cd frontend; npm run build                      # → backend/picturepick/webui
+node desktop\node_modules\typescript\bin\tsc -p desktop\tsconfig.json
+py -3.12 -m PyInstaller --noconfirm --clean --distpath build --workpath build/.pyinstaller-work desktop\pyinstaller\picturepick-backend.spec
+node desktop\scripts\pack-portable.mjs          # → release/win-unpacked + PicturePick-<version>-win-x64-portable.zip
 ```
 
-可选：Electron 版（历史方案；本机 Electron 无法启动时不要使用）
+兼容方案（旧 WebView2 + pywebview；需要 pywebview/pythonnet，且 Windows 上目前受 pythonnet 兼容问题影响）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithInstaller
-# → release/win-unpacked、release/PicturePick-1.0.0-win-x64-portable.exe、...-setup.exe
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WebView2
+# → release/PicturePick-WebView2/PicturePick.exe
 ```
 
 ## 测试与验证
 
 | 项目 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端单元/接口 | `cd backend; python -m pytest -q` | **292 passed**（含 AI 识鸟配置/完整端点双协议/任务/EXIF/解析/AI 参考图与联网搜索降级/SSRF/恢复/客户端容错） |
+| 后端单元/接口 | `cd backend; py -3.12 -m pytest -q` | **292 passed**（含 AI 识鸟配置/完整端点双协议/任务/EXIF/解析/AI 参考图与联网搜索降级/SSRF/恢复/客户端容错） |
 | API 端到端（server/browser + export-photos + restore/resume + 旧版 JSON 兼容 + AI 识鸟 mock 链路） | `python scripts/e2e_api.py --base-url ... --photos-dir samples\photos` | **PASS=238 / FAIL=0**（v4 既有 133 + AI 识鸟新增 105；mock 后端 8126） |
 | 浏览器全流程 UI（Playwright/Chromium） | `node scripts/ui_e2e.cjs`（脚本头部有用法） | **PASS=122 / FAIL=0**（v4 既有 71 + AI 识鸟新增 51；含快捷键 B、队列、原照片+参考照片对照、模态框 X 关闭、端点设置、左栏鸟种、结果页计数） |
 | **真实 Key UI 全流程（非 mock）** | 真实方舟 Key + 真实网络（本机验证，脚本与截图在 `.tmp/` 下） | **PASS=15 / FAIL=0**（识鸟→AI 参考图→X 关闭→重开→采纳→左栏鸟种→结果页计数→结果 JSON） |
-| 桌面版 | `powershell -File scripts\verify-desktop.ps1` | 后端冻结自检通过；GUI 窗口验证进行中（见下） |
+| 桌面版（Electron） | `powershell -File scripts\verify-electron.ps1` | 包内后端健康检查 + 窗口截图/日志（需要可交互桌面） |
 
-> 桌面端已知问题：打包后的 WebView2 窗口需要 pythonnet 加载 .NET 运行时，当前发行包在部分机器上
-> 会报 `Failed to resolve Python.Runtime.Loader.Initialize`，正在修复（改用 .NET WindowsDesktop 运行时）。
-> 在修复完成前，请优先使用「命令行 + 浏览器」方式，功能完全一致。
+> 旧 WebView2 兼容方案（`desktop_webview/`）在 Windows 上受 pythonnet/.NET 兼容问题影响
+> （`Failed to resolve Python.Runtime.Loader.Initialize`），因此桌面版已切换为 Electron；
+> 浏览器/命令行方式始终可用，功能一致。
 
 ## 第三方开源库
 
@@ -418,13 +431,14 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -WithElectron -WithIn
 - AI 识鸟：**火山方舟（Volcengine Ark）`doubao-seed-2-1-lite`** 多模态模型（HTTP API，
   用 Python 标准库 `urllib` 调用，**不新增第三方依赖**）；参考照片由**模型 API 联网检索**提供
   （Responses API `web_search` 工具，需在方舟控制台开通「联网搜索」插件）
-- 桌面端：**pywebview + WebView2**（主方案）、PyInstaller；Electron + electron-builder（可选历史方案）
+- 桌面端：**Electron + electron-builder**（主方案，内置 Chromium、三平台一致）、PyInstaller（后端 sidecar）；
+  pywebview + WebView2（兼容方案）
 - 验证：Playwright（Chromium）
 
 ## 常见问题
 
 - **选择文件夹后没有反应**：浏览器模式下文件夹对话框由本机后端弹出（浏览器安全限制无法直接把绝对路径交给网页）；
-  若返回 `DIALOG_UNAVAILABLE`，请改用命令行 `python -m picturepick serve --dir <目录>` 或桌面版。
+  若返回 `DIALOG_UNAVAILABLE`，请改用命令行 `py -3.12 -m picturepick serve --dir <目录>` 或桌面版。
 - **导出保留照片时**：会弹出系统文件夹对话框选择目标目录，随后由后端复制照片（同名自动加 `-1`/`-2`，不覆盖原文件）。
 - **载入 JSON 无法恢复**：JSON 必须来自本机扫描的选片会话（`origin=server` 或旧版无 origin 字段）；
   恢复时源目录/照片必须可访问（网络盘如 `Z:` 需先连接并保持原来的绝对路径，或照片仍存在于 JSON 记录的路径）。

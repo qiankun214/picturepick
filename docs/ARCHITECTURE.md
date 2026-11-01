@@ -6,8 +6,8 @@
 | --- | --- |
 | 命令行 + 浏览器 | `python -m picturepick serve --dir <目录>` 启动本地服务并自动打开浏览器 |
 | 前后端分离开发 | Vite 开发服务器（5173）→ `/api` 代理到 FastAPI（8000） |
-| 桌面应用 | **PyInstaller + pywebview（Edge WebView2）** 原生窗口，进程内启动同一份 FastAPI 后端；PyInstaller 产出 Windows 绿色版/zip |
-| 可选历史方案 | Electron + electron-builder（代码保留在 `desktop/`，本机 Electron 无法启动时不要使用） |
+| 桌面应用 | **Electron + electron-builder**（内置 Chromium）+ **PyInstaller 打包的后端 sidecar**：主进程拉起本地 FastAPI 服务并加载 `127.0.0.1` 页面，产出 Windows 绿色版/zip（后续可扩 mac/Linux） |
+| 兼容方案 | pywebview + WebView2（代码保留在 `desktop_webview/`；Windows pythonnet/.NET 兼容问题，不再作为默认） |
 
 第 5 版在以上形态中统一新增 **AI 识鸟**（火山方舟 `doubao-seed-2-1-lite` 识别照片鸟种）：
 同一份后端代码（`picturepick.birdid` 子包）同时服务命令行、浏览器与桌面端，
@@ -21,7 +21,8 @@
   Responses API 两种完整端点。客户端用 Python 标准库 `urllib.request` 实现（**不新增依赖**）；
   参考照片由**模型 API 联网检索**（Responses API `web_search` 工具，需账号开通方舟「联网搜索」插件）
   给出真实图片直链，后端只下载/缩放/内存代理
-- 桌面：**pywebview 6.x（Windows 走 Edge WebView2，依赖 pythonnet）** + **PyInstaller 6.x**
+- 桌面：**Electron 33 + electron-builder 26**（主方案；主进程/预加载脚本 TypeScript）+ **PyInstaller 6.x**（后端 sidecar）；
+  兼容方案：pywebview 6.x + Edge WebView2 + pythonnet（`desktop_webview/`）
 - 测试：**pytest** + `fastapi.testclient`；前端 `tsc --noEmit` + `vite build`；浏览器流程用 Playwright（Chromium）
 
 ## 3. 目录结构
@@ -50,12 +51,14 @@ E:\picturePick\
 │   │   └── ui/               # start / picker / filmstrip / results / modal / toast / screens
 │   │       └── bird/         #   queue.ts（右侧队列+轮询）/ resultModal.ts / settings.ts / info.ts
 │   └── scripts/              # 受限环境下的 Vite(esbuild-wasm) 启动器
-├── desktop_webview/          # 桌面版（主方案）
+├── desktop/                  # 桌面版（主方案）：Electron 外壳 + PyInstaller 后端 sidecar
+│   ├── src/                  # main.ts / preload.ts（窗口、原生对话框、sidecar 生命周期）
+│   ├── pyinstaller/          # 后端 sidecar 的 PyInstaller spec
+│   └── scripts/              # pack-portable.mjs（离线绿色版）等
+├── desktop_webview/          # 兼容方案：pywebview + WebView2（不再默认）
 │   ├── picturepick_desktop/  # desktop.py（后端线程 + WebView2 窗口 + 原生桥接 + --selftest）
-│   ├── picturepick-desktop.spec
 │   └── requirements.txt      # pywebview + pythonnet
-├── desktop/                  # 可选历史方案：Electron 外壳 + sidecar + electron-builder
-├── scripts/                  # build.ps1 / verify-desktop.ps1 / dev.ps1 / e2e_api.py / ui_e2e.cjs / 样例照片
+├── scripts/                  # build.ps1 / verify-electron.ps1 / dev.ps1 / e2e_api.py / ui_e2e.cjs / 样例照片
 ├── build.cmd / verify-desktop.cmd
 ├── build/                    # 打包中间产物（webview/、backend/）
 └── release/                  # 桌面版产物
@@ -100,17 +103,20 @@ E:\picturePick\
 
 ### 4.3 兼容说明
 
-- CLI `--dir` / 桌面端 `--dir` 仍是 server 来源预扫描，行为一致。
+- CLI `--dir` / 兼容方案（`desktop_webview/`）的 `--dir` 仍是 server 来源预扫描，行为一致。
 - `origin="browser"`（第 2 版的元数据导入）接口保留用于兼容/测试，但当前 UI 不再使用；
   AI 识鸟不支持 browser 来源（返回 `INVALID_SOURCE`）。
 - 结果 JSON `schemaVersion` 仍为 `1`：v5 只新增可选字段，旧 JSON 可恢复、新 JSON 旧版本应用忽略新字段。
 
-### 4.4 桌面窗口（WebView2）
+### 4.4 桌面窗口（Electron）
 
-`PicturePick.exe` → 进程内后台线程启动 FastAPI（随机空闲端口）→ 轮询 `/api/health` →
-pywebview 创建 WebView2 窗口加载 `http://127.0.0.1:<port>/?desktop=webview2` →
-preload 桥接提供原生「另存为 JSON / 打开路径」→ 窗口关闭后停止后端线程。
-`--selftest` 可在不开窗口的情况下检查内置前端、pythonnet、WebView2 桥接与后端是否可用。
+`release/win-unpacked/PicturePick.exe`（Electron 主进程）→ 选空闲端口 → 拉起
+`resources/backend/picturepick-backend.exe serve --host 127.0.0.1 --port <port> --no-open`（PyInstaller sidecar）
+→ 轮询 `/api/health` → 窗口加载 `http://127.0.0.1:<port>/` →
+preload/IPC 提供原生「选择目录 / 另存为 JSON / 打开路径」→ 退出时用 `taskkill /T /F` 清理 sidecar 进程树。
+
+兼容方案（`desktop_webview/`）：进程内 pywebview/WebView2 窗口加载 `?desktop=webview2`，`--selftest` 自检；
+因 Windows pythonnet/.NET 兼容问题不再默认，构建入口为 `build.ps1 -WebView2`。
 
 AI 识鸟新增的 `picturepick.birdid` 子包由 `picturepick.app` 静态 import，PyInstaller 会随
 import 自动收集（spec 已把 `picturepick.app` 列入 hiddenimports），**spec 无需新增 hiddenimports**；
@@ -119,7 +125,7 @@ birdid 只用 stdlib 与 Pillow，也不新增打包数据。
 ### 4.5 AI 识鸟数据流（第 5.2 版）
 
 ```
-选片页（浏览器/WebView2）
+选片页（浏览器/Electron）
   │ ① 按 B / 点「AI 识鸟」 → POST /api/sessions/{sid}/bird-tasks {photoId}
   ▼
 FastAPI（api.py → BirdService）
