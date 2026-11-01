@@ -5,13 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "picturepick"
 description = "PicturePick 本地选片服务（FastAPI + uvicorn + Pillow）"
+# 开发/打包基线为 Python 3.12（3.10 已 EOL），见 docs/PYTHON-UPGRADE.md
 requires-python = ">=3.10"
 dynamic = ["version"]
 dependencies = [
-    "fastapi>=0.110",
-    "uvicorn>=0.29",
-    "pydantic>=1.10",
-    "Pillow>=9.0",
+    # 新版 FastAPI 不再支持 pydantic v1，这里锁定已验证区间
+    "fastapi>=0.115.14,<0.116",
+    "uvicorn>=0.34.3,<0.35",
+    "pydantic>=1.10.15,<2",
+    "Pillow>=10.4",
 ]
 
 [project.optional-dependencies]

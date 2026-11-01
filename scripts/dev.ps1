@@ -8,6 +8,20 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# 选择 Python 解释器：优先 .venv，其次 py -3.12（避免 Store 版 python 别名抢占）
+$pythonExe = 'python'
+$venvPython = Join-Path $root '.venv\Scripts\python.exe'
+if (Test-Path $venvPython) {
+    $pythonExe = $venvPython
+}
+elseif (Get-Command py -ErrorAction SilentlyContinue) {
+    $candidate = & py -3.12 -c "import sys; print(sys.executable)" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $candidate -and (Test-Path ([string]$candidate).Trim())) {
+        $pythonExe = ([string]$candidate).Trim()
+    }
+}
+Write-Host "[dev] Python: $pythonExe" -ForegroundColor DarkGray
+
 # 沙箱/受限 HOME 环境下的 npm 缓存与脚本策略
 $env:npm_config_cache = Join-Path $root '.cache\npm-frontend'
 $env:npm_config_logs_dir = Join-Path $root '.cache\npm-frontend\_logs'
@@ -22,7 +36,7 @@ if (-not (Test-Path (Join-Path $root 'frontend\node_modules'))) {
 $backend = $null
 try {
     Write-Host "[dev] 启动后端 http://127.0.0.1:$BackendPort ..." -ForegroundColor Cyan
-    $backend = Start-Process -FilePath 'python' `
+    $backend = Start-Process -FilePath $pythonExe `
         -ArgumentList '-m', 'picturepick', 'serve', '--port', "$BackendPort", '--no-open' `
         -WorkingDirectory (Join-Path $root 'backend') -PassThru -NoNewWindow
 

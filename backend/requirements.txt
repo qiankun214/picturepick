@@ -1,13 +1,18 @@
 # PicturePick 后端依赖
 #
-# 运行环境已全局安装（Windows / Python 3.10），正常情况下无需 pip install。
-# 与 pyproject.toml [project].dependencies 保持一致。
+# 基线环境：Python 3.12（Windows）。
+#   * Python 3.10 已于 2026-10-01 EOL；
+#   * 桌面版 pythonnet 3.2+ 要求 Python >= 3.11。
+# 升级步骤见 docs/PYTHON-UPGRADE.md。与 pyproject.toml [project].dependencies 保持一致。
 
 # ---- 运行时依赖 ----
-fastapi>=0.110
-uvicorn>=0.29
-pydantic>=1.10
-Pillow>=9.0
+# 锁定到已在 3.10 上验证过的版本区间：新版 FastAPI 不再支持 pydantic v1
+fastapi>=0.115.14,<0.116
+uvicorn>=0.34.3,<0.35
+# 代码只用 pydantic v1/v2 共有 API，锁定 v1 保证行为不变
+pydantic>=1.10.15,<2
+# Python 3.12 需要 Pillow >= 10.1（9.x 没有 cp312 wheel）
+Pillow>=10.4
 
 # ---- 测试依赖 ----
 pytest>=7.0
