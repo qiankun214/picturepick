@@ -91,16 +91,88 @@ class Logger:
 
     def __call__(self, *parts: object) -> None:
         line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] " + " ".join(str(p) for p in parts)
-        print(line, flush=True)
+        # 冻结的窗口模式（console=False）下 sys.stdout 可能是 _LogStream，
+        # 此时不再 print（否则同一行会在 desktop.log 里重复两次）。
+        if sys.stdout is not None and not isinstance(sys.stdout, _LogStream):
+            try:
+                print(line, flush=True)
+            except Exception:  # noqa: BLE001 - 控制台不可写时忽略
+                pass
         if self.file is not None:
             try:
-                with self.file.open("a", encoding="utf-8") as handle:
-                    handle.write(line + "\n")
+                with _LOG_LOCK:
+                    with self.file.open("a", encoding="utf-8") as handle:
+                        handle.write(line + "\n")
             except OSError:
                 pass
 
 
+_LOG_LOCK = threading.Lock()
+
+
+class _LogStream:
+    """窗口模式下的 stdout/stderr 兜底：写入 desktop.log。
+
+    PyInstaller ``--windowed``（spec 里 ``console=False``）冻结后，
+    ``sys.stdout`` / ``sys.stderr`` 为 ``None``；uvicorn 的
+    ``DefaultFormatter.__init__`` 会调用 ``sys.stderr.isatty()``，于是启动时直接
+    ``AttributeError: 'NoneType' object has no attribute 'isatty'`` →
+    ``ValueError: Unable to configure formatter 'default'``。
+    """
+
+    _picturepick_log_stream = True
+    encoding = "utf-8"
+    errors = "replace"
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def write(self, text: str) -> int:
+        if not text:
+            return 0
+        try:
+            target = log_dir() / "desktop.log"
+            with _LOG_LOCK:
+                with target.open("a", encoding="utf-8", errors="replace") as handle:
+                    handle.write(text)
+        except Exception:  # noqa: BLE001 - 日志失败不能影响主流程
+            pass
+        return len(text)
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+    def writable(self) -> bool:
+        return True
+
+    def fileno(self) -> int:
+        raise OSError("PicturePick log stream has no file descriptor")
+
+
+def ensure_std_streams() -> None:
+    """给冻结后的无控制台进程补齐 sys.stdin/stdout/stderr。
+
+    在入口处尽早调用：uvicorn 创建 ``Config`` 时就会配置 logging，
+    而 ``logging.StreamHandler`` 和 ``uvicorn.logging.DefaultFormatter`` 都要求
+    ``sys.stderr`` 不是 ``None``。
+    """
+    if sys.stdout is None:
+        sys.stdout = _LogStream("stdout")  # type: ignore[assignment]
+    if sys.stderr is None:
+        sys.stderr = _LogStream("stderr")  # type: ignore[assignment]
+    if sys.stdin is None:
+        try:
+            sys.stdin = open(os.devnull, "r", encoding="utf-8", errors="replace")  # noqa: SIM115
+        except OSError:
+            pass
+
+
 log = Logger()
+ensure_std_streams()
+
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +502,49 @@ def prescan(server: BackendServer, directory: str, recursive: bool) -> None:
     log(f"预扫描完成：{len(result.photos)} 张照片（{result.root}）")
 
 
+def _browser_fallback(port: int, error: BaseException) -> int:
+    """原生窗口不可用时的兜底：用系统浏览器打开，并保持后端进程存活。
+
+    触发场景：WebView2/pythonnet 初始化失败（例如 Windows 冻结包里的
+    `Failed to resolve Python.Runtime.Loader.Initialize`）。用户仍可通过
+    浏览器使用全部功能；关闭提示对话框后程序退出。
+    """
+    url = f"http://127.0.0.1:{port}/"
+    log("原生窗口启动失败，回退到系统浏览器:", error)
+    try:
+        import webbrowser
+
+        webbrowser.open(url)
+        log("已在系统浏览器打开:", url)
+    except Exception as exc:  # noqa: BLE001
+        log("打开系统浏览器失败:", exc)
+
+    reason = str(error).strip() or type(error).__name__
+    message = (
+        "原生窗口启动失败，已尝试用系统浏览器打开：\n"
+        f"{url}\n\n"
+        f"原因：{reason[:600]}\n\n"
+        "保持本对话框打开即可继续使用浏览器中的 PicturePick；关闭本对话框后程序退出。"
+    )
+    auto_close_ms = os.environ.get("PICTUREPICK_FALLBACK_AUTOCLOSE_MS", "").strip()
+    if auto_close_ms.isdigit():  # 自动化测试/冒烟用，不弹窗
+        time.sleep(int(auto_close_ms) / 1000.0)
+        return 0
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, APP_TITLE, 0x40)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
+    ensure_std_streams()
     args = build_arg_parser().parse_args(argv)
     log("PicturePick 桌面版启动", "frozen=" + str(getattr(sys, "frozen", False)))
     log("userData:", user_data_dir())
@@ -465,48 +579,56 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         import webview
     except Exception as exc:  # noqa: BLE001
-        log("pywebview 导入失败:", exc)
-        _show_fatal(
-            "PicturePick 启动失败",
-            "缺少 WebView2 运行库或 pywebview 依赖：\n"
-            f"{exc}\n\nWindows 11 / 已安装 Edge 的 Windows 10 自带 WebView2 运行时。",
-        )
+        code = _browser_fallback(port, exc)
         server.stop()
-        return 1
+        return code
 
     api = DesktopApi()
     url = f"http://127.0.0.1:{port}/?desktop=webview2"
-    window = webview.create_window(
-        APP_TITLE,
-        url,
-        js_api=api,
-        width=WINDOW_WIDTH,
-        height=WINDOW_HEIGHT,
-        min_size=(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT),
-        background_color=BACKGROUND_COLOR,
-        text_select=False,
-        minimized=args.minimized,
-        on_top=bool(os.environ.get("PICTUREPICK_DESKTOP_SCREENSHOT")),
-    )
-    if window is None:
-        log("窗口创建失败")
+    try:
+        window = webview.create_window(
+            APP_TITLE,
+            url,
+            js_api=api,
+            width=WINDOW_WIDTH,
+            height=WINDOW_HEIGHT,
+            min_size=(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT),
+            background_color=BACKGROUND_COLOR,
+            text_select=False,
+            minimized=args.minimized,
+            on_top=bool(os.environ.get("PICTUREPICK_DESKTOP_SCREENSHOT")),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log("窗口创建失败:", exc)
+        code = _browser_fallback(port, exc)
         server.stop()
-        return 1
+        return code
+    if window is None:
+        log("窗口创建失败：pywebview 返回空窗口")
+        code = _browser_fallback(port, RuntimeError("pywebview 返回空窗口"))
+        server.stop()
+        return code
     api.attach(window)
     window.events.loaded += lambda: run_test_hooks(window, APP_TITLE)
 
     storage = user_data_dir() / "webview"
+    icon_path = _app_root() / "resources" / "icon.ico"
     try:
         webview.start(
             debug=args.debug,
             private_mode=False,
             storage_path=str(storage),
-            icon=str(_app_root() / "resources" / "icon.ico") if (_app_root() / "resources" / "icon.ico").exists() else None,
+            icon=str(icon_path) if icon_path.exists() else None,
         )
-    finally:
-        log("窗口已关闭，正在停止后端…")
+    except Exception as exc:  # noqa: BLE001
+        log("原生窗口启动失败:", exc)
+        code = _browser_fallback(port, exc)
         server.stop()
         log("已退出")
+        return code
+    log("窗口已关闭，正在停止后端…")
+    server.stop()
+    log("已退出")
     return 0
 
 

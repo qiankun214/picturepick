@@ -1,4 +1,7 @@
-# PicturePick 桌面端（PyInstaller + WebView2）依赖
+# PicturePick 桌面端（PyInstaller + pywebview）依赖
+# 基线：Python 3.12（Python 3.10 已 EOL，且 pythonnet 3.2+ 要求 >=3.11）
 # 后端依赖同 backend/requirements.txt（打包时使用当前 Python 环境）
+# 升级步骤见 docs/PYTHON-UPGRADE.md
 pywebview>=6.2
-pythonnet>=3.1
+# Python 3.12 下会解析到 pythonnet 3.2.x；仅 Windows 需要
+pythonnet>=3.2; sys_platform == "win32"

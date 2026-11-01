@@ -28,12 +28,57 @@ import os from 'node:os';
 import path from 'node:path';
 import util from 'node:util';
 
+/* -------------------------------------------------------------------------- */
+/* 启动早期日志：Electron 初始化失败 / 单实例锁失败 / 未捕获异常也能留下证据        */
+/* -------------------------------------------------------------------------- */
+
+const STARTUP_LOG_DIR = process.env.PICTUREPICK_DESKTOP_LOG_DIR
+  ? path.resolve(process.env.PICTUREPICK_DESKTOP_LOG_DIR)
+  : path.join(os.tmpdir(), 'picturepick-startup');
+const STARTUP_LOG_PATH = path.join(STARTUP_LOG_DIR, 'startup.log');
+
+function startupLog(message: string): void {
+  const line = `[${new Date().toISOString()}] ${message}\n`;
+  try {
+    fs.mkdirSync(STARTUP_LOG_DIR, { recursive: true });
+    fs.appendFileSync(STARTUP_LOG_PATH, line);
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (process.env.PICTUREPICK_DESKTOP_DEBUG === '1') console.log(`[startup] ${message}`);
+  } catch {
+    /* ignore */
+  }
+}
+
+let packagedHint = '?';
+try {
+  packagedHint = String(app?.isPackaged);
+} catch {
+  packagedHint = '?';
+}
+startupLog(
+  `主进程加载 electron=${process.versions.electron ?? '?'} packaged=${packagedHint} ` +
+    `exec=${process.execPath} argv=${process.argv.slice(1).join(' ')} ` +
+    `ELECTRON_RUN_AS_NODE=${process.env.ELECTRON_RUN_AS_NODE ?? ''}`,
+);
+
+process.on('uncaughtException', (error) => {
+  startupLog(`uncaughtException: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+});
+process.on('unhandledRejection', (reason) => {
+  startupLog(`unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
+});
+
 // 防御：某些开发环境（CI/沙箱/IDE 终端）会全局设置 ELECTRON_RUN_AS_NODE=1，
 // 此时 electron.exe 以纯 Node 方式运行，require('electron') 拿不到 app，报错难以定位。
 if (typeof app === 'undefined' || app === null) {
+  startupLog('Electron app 未初始化：疑似 ELECTRON_RUN_AS_NODE=1，或安装不完整。');
   console.error(
     '[PicturePick] Electron 主进程未正确初始化：检测到 ELECTRON_RUN_AS_NODE=1 之类的环境变量。\n' +
-      '请在启动 electron 前清除该变量，例如 PowerShell: Remove-Item Env:\\ELECTRON_RUN_AS_NODE',
+      '请在启动 electron 前清除该变量，例如 PowerShell: Remove-Item Env:\\ELECTRON_RUN_AS_NODE\n' +
+      `早期日志：${STARTUP_LOG_PATH}`,
   );
   process.exit(1);
 }
@@ -273,13 +318,17 @@ function buildBackendCommand(port: number): BackendCommand {
         '请确认 backend/ 已就绪，或用 PICTUREPICK_DESKTOP_TEST_URL 先验证 Electron 外壳。',
     );
   }
-  const python = process.env.PICTUREPICK_PYTHON || 'python';
-  return {
-    command: python,
-    args: ['-m', 'picturepick', ...commonArgs],
-    cwd: backendDir,
-    env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' },
-  };
+  // 开发模式默认用 py -3.12：避免 Microsoft Store 版 `python` 别名抢占，
+  // 或 PATH 未包含 Python 3.12 时找不到解释器。可用 PICTUREPICK_PYTHON 覆盖。
+  const pythonOverride = process.env.PICTUREPICK_PYTHON;
+  const devEnv = { ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' };
+  if (pythonOverride) {
+    return { command: pythonOverride, args: ['-m', 'picturepick', ...commonArgs], cwd: backendDir, env: devEnv };
+  }
+  if (process.platform === 'win32') {
+    return { command: 'py', args: ['-3.12', '-m', 'picturepick', ...commonArgs], cwd: backendDir, env: devEnv };
+  }
+  return { command: 'python3', args: ['-m', 'picturepick', ...commonArgs], cwd: backendDir, env: devEnv };
 }
 
 /** 等待子进程真正 spawn 成功；遇到 error（如沙箱 EPERM）返回 false。 */
@@ -471,7 +520,7 @@ function createWindow(): BrowserWindow {
     minHeight: WINDOW_MIN_HEIGHT,
     title: APP_TITLE,
     backgroundColor: BACKGROUND_COLOR,
-    show: false,
+    show: true,
     autoHideMenuBar: true,
     ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
@@ -513,6 +562,25 @@ function createWindow(): BrowserWindow {
 
   window.webContents.on('render-process-gone', (_event, details) => {
     log(`渲染进程退出：${JSON.stringify(details)}`);
+  });
+
+  // 前端在选片页注册了 beforeunload（防止误退出）。Electron 不像浏览器那样自动弹
+  // “离开此页面？”对话框；如果不处理，点窗口右上角 X 会看起来“没反应”（关闭被静默阻止）。
+  // 这里用原生对话框确认；选择「退出程序」时 event.preventDefault() 表示忽略
+  // beforeunload，允许窗口真正关闭。
+  window.webContents.on('will-prevent-unload', (event) => {
+    const choice = dialog.showMessageBoxSync(window, {
+      type: 'question',
+      buttons: ['继续选片', '退出程序'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: APP_TITLE,
+      message: '选片还没结束，确定要退出吗？',
+      detail: '退出后本轮未结束的选片不会保存。可以先点「结束本轮」生成结果再退出。',
+    });
+    log(`will-prevent-unload：用户选择 ${choice === 1 ? '退出程序' : '继续选片'}`);
+    if (choice === 1) event.preventDefault();
   });
 
   window.on('closed', () => {
@@ -736,13 +804,18 @@ function installLifecycleHooks(): void {
 function bootstrap(): void {
   installLifecycleHooks();
   app.whenReady().then(onReady).catch((error) => {
+    startupLog(`whenReady 失败: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
     console.error(error);
     dialog.showErrorBox('PicturePick 启动失败', error instanceof Error ? error.message : String(error));
     app.quit();
   });
 }
 
-ensureUserDataWritable();
+try {
+  ensureUserDataWritable();
+} catch (error) {
+  startupLog(`ensureUserDataWritable 失败: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+}
 
 function ensureUserDataWritable(): void {
   const override = process.env.PICTUREPICK_DESKTOP_USER_DATA;
@@ -772,8 +845,21 @@ function ensureUserDataWritable(): void {
 }
 
 if (!app.requestSingleInstanceLock()) {
-  log('已有实例在运行，退出');
+  startupLog('requestSingleInstanceLock=false：已有实例在运行，或单实例锁获取失败');
+  try {
+    if (process.env.PICTUREPICK_DESKTOP_HEADLESS !== '1') {
+      dialog.showErrorBox(
+        'PicturePick',
+        'PicturePick 似乎已在运行（单实例锁未获取）。\n\n' +
+          '如果看不到窗口，请在任务管理器里结束所有 PicturePick.exe / electron.exe 后重试。\n' +
+          `早期日志：${STARTUP_LOG_PATH}`,
+      );
+    }
+  } catch {
+    /* ignore */
+  }
   app.quit();
 } else {
+  startupLog('single instance lock ok');
   bootstrap();
 }

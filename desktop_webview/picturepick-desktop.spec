@@ -46,6 +46,21 @@ hiddenimports += [
     "webview.platforms.edgechromium",
 ]
 
+# pywebview master（含 PR #1832：修复 Windows 冻结下 pythonnet 的 .NET 运行时选择）
+# 新增的模块；当前安装的 pywebview 若还没有这些模块则自动跳过。
+try:
+    import importlib.util
+
+    for _module in (
+        "webview.clr_runtime",
+        "webview.platforms._pythonnet",
+        "webview.platforms._winforms",
+    ):
+        if importlib.util.find_spec(_module) is not None:
+            hiddenimports.append(_module)
+except (ImportError, ValueError):  # pragma: no cover - 打包环境探测
+    pass
+
 # pythonnet / clr_loader：.NET 运行时桥接（Python.Runtime.dll 等）
 for package in ("pythonnet", "clr_loader"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
